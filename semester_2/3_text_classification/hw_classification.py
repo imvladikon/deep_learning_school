@@ -45,9 +45,12 @@ class RNNBaseline(nn.Module):
         
         self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx = pad_idx)
         
-        self.rnn = None  # YOUR CODE GOES HERE
+        self.rnn = nn.LSTM(embedding_dim, hidden_dim, n_layers, 
+                        dropout=dropout, bidirectional=bidirectional)
         
-        self.fc = None  # YOUR CODE GOES HERE
+        
+        self.fc = nn.Linear(hidden_dim*2, output_dim)
+        self.dropout = nn.Dropout(dropout)
         
         
     def forward(self, text, text_lengths):
@@ -59,7 +62,10 @@ class RNNBaseline(nn.Module):
         #embedded = [sent len, batch size, emb dim]
         
         #pack sequence
-        packed_embedded = nn.utils.rnn.pack_padded_sequence(embedded, text_lengths)
+           
+        # workaround because of https://github.com/pytorch/pytorch/issues/43227
+
+        packed_embedded = nn.utils.rnn.pack_padded_sequence(embedded.cpu(), text_lengths.cpu()).to(device)
         
         # cell arg for LSTM, remove for GRU
         packed_output, (hidden, cell) = self.rnn(packed_embedded)
@@ -75,7 +81,7 @@ class RNNBaseline(nn.Module):
         #concat the final forward (hidden[-2,:,:]) and backward (hidden[-1,:,:]) hidden layers
         #and apply dropout
         
-        hidden = None  # YOUR CODE GOES HERE
+        hidden = self.dropout(torch.cat((hidden[-2,:,:], hidden[-1,:,:]), dim = 1))
                 
         #hidden = [batch size, hid dim * num directions] or [batch_size, hid dim * num directions]
             
@@ -112,25 +118,55 @@ max_epochs = 20
 import numpy as np
 
 min_loss = np.inf
-
+optimizer = opt
+criterion=loss_func
 cur_patience = 0
+max_grad_norm = 2
+metric_history = {"train":[], "val":[]} 
+
+def binary_accuracy(preds, y):
+    rounded_preds = torch.round(torch.sigmoid(preds))
+    correct = (rounded_preds == y).float()
+    acc = correct.sum() / len(correct)
+    return acc
 
 for epoch in range(1, max_epochs + 1):
     train_loss = 0.0
+    train_acc = 0.0
     model.train()
     pbar = tqdm(enumerate(train_iter), total=len(train_iter), leave=False)
     pbar.set_description(f"Epoch {epoch}")
     for it, batch in pbar: 
-        #YOUR CODE GOES HERE
+        optimizer.zero_grad()
+        text, text_lengths = batch.text
+        predictions = model(text, text_lengths).squeeze(1)
+        loss = criterion(predictions, batch.label)
+        acc = binary_accuracy(predictions, batch.label)
+        loss.backward()
+        if max_grad_norm is not None:
+          torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+        optimizer.step()
+        train_loss += loss.item()
+        train_acc += acc.item()
 
     train_loss /= len(train_iter)
+    train_acc /= len(train_iter)
+    metric_history["train"].append({"epoch": epoch,"loss":train_loss, "acc":train_acc})
     val_loss = 0.0
+    val_acc = 0.0
     model.eval()
     pbar = tqdm(enumerate(valid_iter), total=len(valid_iter), leave=False)
     pbar.set_description(f"Epoch {epoch}")
     for it, batch in pbar:
-        # YOUR CODE GOES HERE
+        text, text_lengths = batch.text
+        predictions = model(text, text_lengths).squeeze(1)
+        loss = criterion(predictions, batch.label)
+        acc = binary_accuracy(predictions, batch.label)
+        val_loss += loss.item()
+        val_acc += acc.item()
     val_loss /= len(valid_iter)
+    val_acc /= len(valid_iter)
+    metric_history["val"].append({"epoch": epoch,"loss":val_loss, "acc":val_acc})
     if val_loss < min_loss:
         min_loss = val_loss
         best_model = model.state_dict()
@@ -143,7 +179,45 @@ for epoch in range(1, max_epochs + 1):
     print('Epoch: {}, Training Loss: {}, Validation Loss: {}'.format(epoch, train_loss, val_loss))
 model.load_state_dict(best_model)
 
+import matplotlib.pyplot as plt
 
+def plot_learning_curves(metric_history, title=""):
+    with plt.style.context('seaborn-whitegrid'):
+      fig,ax = plt.subplots(1,2, figsize=(16, 6))
+      train_history = pd.DataFrame(metric_history["train"]).reset_index()
+      val_history = pd.DataFrame(metric_history["val"]).reset_index()
+      train_history.plot(x="epoch", y="acc", ax=ax[0], color="r", label="acc_train") 
+      val_history.plot(x="epoch", y="acc", ax=ax[0], color="b", label="acc_val")
+      train_history.plot(x="epoch", y="loss", color="r", ax=ax[1], label="loss_train")
+      val_history.plot(x="epoch", y="loss", color="b", ax=ax[1], label="loss_val")
+      ax[0].set_title(f'Train Acc: {train_history.iloc[-1]["acc"]:.4f} Val Acc: {val_history.iloc[-1]["acc"]:.4f}')
+      ax[1].set_title(f'Train Loss: {train_history.iloc[-1]["loss"]:.4f} Val Loss: {val_history.iloc[-1]["loss"]:.4f}')
+      if not title:
+        fig.suptitle(title)
+      plt.show();
+
+plot_learning_curves(metric_history)
+
+from sklearn.metrics import f1_score
+
+def evaluate_f1(model, iterator, criterion):
+    epoch_loss = 0
+    epoch_acc = 0
+    model.eval()
+    with torch.no_grad():
+        for batch in iterator:
+            text, text_lengths = batch.text
+            predictions = model(text, text_lengths).squeeze(1)
+            loss = criterion(predictions, batch.label)
+            y_true = batch.label
+            y_pred = torch.round(torch.sigmoid(predictions))
+            acc = f1_score(y_true.detach().cpu().numpy(), y_pred.detach().cpu().numpy())
+            epoch_loss += loss.item()
+            epoch_acc += acc.item()
+    return epoch_loss / len(iterator), epoch_acc / len(iterator)
+
+test_loss, test_f1 = evaluate_f1(model, test_iter, criterion)
+test_f1
 
 TEXT = Field(sequential=True, lower=True, batch_first=True)  # batch_first тк мы используем conv  
 LABEL = LabelField(batch_first=True, dtype=torch.float)
@@ -176,13 +250,14 @@ class CNN(nn.Module):
         dropout=0.5,
     ):
         super().__init__()
-        
+
         self.embedding = nn.Embedding(vocab_size, emb_dim)
-        self.conv_0 = None  # YOUR CODE GOES HERE
-        
-        self.conv_1 = None  # YOUR CODE GOES HERE
-        
-        self.conv_2 = None  # YOUR CODE GOES HERE
+        self.conv_0 = nn.Conv2d(in_channels = 1, out_channels = out_channels, 
+                                kernel_size = (kernel_sizes[0], dim))
+        self.conv_1 = nn.Conv2d(in_channels = 1, out_channels = out_channels, 
+                                kernel_size = (kernel_sizes[1], dim))
+        self.conv_2 = nn.Conv2d(in_channels = 1, out_channels = out_channels, 
+                                kernel_size = (kernel_sizes[2], dim))
         
         self.fc = nn.Linear(len(kernel_sizes) * out_channels, 1)
         
@@ -193,11 +268,11 @@ class CNN(nn.Module):
         
         embedded = self.embedding(text)
         
-        embedded = embedded  # may be reshape here
+        embedded = embedded.unsqueeze(1)
         
-        conved_0 = F.relu(self.conv_0(embedded))  # may be reshape here
-        conved_1 = F.relu(self.conv_1(embedded))  # may be reshape here
-        conved_2 = F.relu(self.conv_2(embedded))  # may be reshape here
+        conved_0 = F.relu(self.conv_0(embedded).squeeze(3))
+        conved_1 = F.relu(self.conv_1(embedded).squeeze(3))
+        conved_2 = F.relu(self.conv_2(embedded).squeeze(3))
         
         pooled_0 = F.max_pool1d(conved_0, conved_0.shape[2]).squeeze(2)
         pooled_1 = F.max_pool1d(conved_1, conved_1.shape[2]).squeeze(2)
@@ -226,25 +301,46 @@ max_epochs = 30
 import numpy as np
 
 min_loss = np.inf
-
+metric_history = {"train":[], "val":[]} 
 cur_patience = 0
 
 for epoch in range(1, max_epochs + 1):
     train_loss = 0.0
+    train_acc = 0
     model.train()
     pbar = tqdm(enumerate(train_iter), total=len(train_iter), leave=False)
     pbar.set_description(f"Epoch {epoch}")
     for it, batch in pbar: 
-        #YOUR CODE GOES HERE
+        optimizer.zero_grad()
+        text = batch.text
+        predictions = model(text).squeeze(1)
+        loss = criterion(predictions, batch.label)
+        acc = binary_accuracy(predictions, batch.label)
+        loss.backward()
+        optimizer.step()
+        train_loss += loss.item()
+        train_acc += acc.item()
 
     train_loss /= len(train_iter)
+    train_acc /= len(train_iter)
+    metric_history["train"].append({"epoch": epoch,"loss":train_loss, "acc":train_acc})
     val_loss = 0.0
+    train_loss = 0.0
     model.eval()
-    pbar = tqdm(enumerate(valid_iter), total=len(valid_iter), leave=False)
+    
+    pbar = tqdm(enumerate(val_iter), total=len(val_iter), leave=False)
     pbar.set_description(f"Epoch {epoch}")
     for it, batch in pbar:
-        # YOUR CODE GOES HERE
-    val_loss /= len(valid_iter)
+        text = batch.text
+        predictions = model(text).squeeze(1)
+        loss = criterion(predictions, batch.label)
+        acc = binary_accuracy(predictions, batch.label)
+        val_loss += loss.item()
+        val_acc += acc.item()
+    
+    val_loss /= len(val_iter)
+    val_acc /= len(val_iter)
+    metric_history["val"].append({"epoch": epoch,"loss":val_loss, "acc":val_acc})
     if val_loss < min_loss:
         min_loss = val_loss
         best_model = model.state_dict()
@@ -256,6 +352,27 @@ for epoch in range(1, max_epochs + 1):
     
     print('Epoch: {}, Training Loss: {}, Validation Loss: {}'.format(epoch, train_loss, val_loss))
 model.load_state_dict(best_model)
+
+plot_learning_curves(metric_history)
+
+def evaluate_f1(model, iterator, criterion):
+    epoch_loss = 0
+    epoch_acc = 0
+    model.eval()
+    with torch.no_grad():
+        for batch in iterator:
+            text = batch.text
+            predictions = model(text).squeeze(1)
+            loss = criterion(predictions, batch.label)
+            y_true = batch.label
+            y_pred = torch.round(torch.sigmoid(predictions))
+            acc = f1_score(y_true.detach().cpu().numpy(), y_pred.detach().cpu().numpy())
+            epoch_loss += loss.item()
+            epoch_acc += acc.item()
+    return epoch_loss / len(iterator), epoch_acc / len(iterator)
+
+test_loss, test_f1 = evaluate_f1(model, test_iter, criterion)
+test_f1
 
 !pip install -q captum
 
@@ -333,10 +450,15 @@ interpret_sentence(model, 'It is a disgusting movie!', label=0)
 print('Visualize attributions based on Integrated Gradients')
 visualization.visualize_text(vis_data_records_ig)
 
-TEXT.build_vocab(trn, vectors=)# YOUR CODE GOES HERE
+try:
+  # tqdm newline issue: https://stackoverflow.com/questions/41707229/tqdm-printing-to-newline
+  tqdm._instances.clear()
+except:
+  pass
+
+TEXT.build_vocab(trn, vectors="glove.6B.300d")
 # подсказка: один из импортов пока не использовался, быть может он нужен в строке выше :)
 LABEL.build_vocab(trn)
-
 word_embeddings = TEXT.vocab.vectors
 
 kernel_sizes = [3, 4, 5]
@@ -366,7 +488,7 @@ word_embeddings = TEXT.vocab.vectors
 
 prev_shape = model.embedding.weight.shape
 
-model.embedding.weight = # инициализируйте эмбэдинги
+model.embedding.weight.data.copy_(word_embeddings)
 
 assert prev_shape == model.embedding.weight.shape
 model.to(device)
@@ -376,25 +498,44 @@ opt = torch.optim.Adam(model.parameters())
 import numpy as np
 
 min_loss = np.inf
-
+metric_history = {"train":[], "val":[]} 
 cur_patience = 0
 
 for epoch in range(1, max_epochs + 1):
     train_loss = 0.0
+    train_acc = 0.0
     model.train()
     pbar = tqdm(enumerate(train_iter), total=len(train_iter), leave=False)
     pbar.set_description(f"Epoch {epoch}")
     for it, batch in pbar: 
-        #YOUR CODE GOES HERE
+        optimizer.zero_grad()
+        text = batch.text
+        predictions = model(text).squeeze(1)
+        loss = criterion(predictions, batch.label)
+        acc = binary_accuracy(predictions, batch.label)
+        loss.backward()
+        optimizer.step()
+        train_loss += loss.item()
+        train_acc += acc.item()
 
     train_loss /= len(train_iter)
+    train_acc /= len(train_iter)
+    metric_history["train"].append({"epoch": epoch,"loss":train_loss, "acc":train_acc})
     val_loss = 0.0
+    val_acc = 0.0
     model.eval()
-    pbar = tqdm(enumerate(valid_iter), total=len(valid_iter), leave=False)
+    pbar = tqdm(enumerate(val_iter), total=len(val_iter), leave=False)
     pbar.set_description(f"Epoch {epoch}")
     for it, batch in pbar:
-        # YOUR CODE GOES HERE
-    val_loss /= len(valid_iter)
+        text = batch.text
+        predictions = model(text).squeeze(1)
+        loss = criterion(predictions, batch.label)
+        acc = binary_accuracy(predictions, batch.label)
+        val_loss += loss.item()
+        val_acc += acc.item()
+    val_loss /= len(val_iter)
+    val_acc /= len(val_iter)
+    metric_history["val"].append({"epoch": epoch,"loss":val_loss, "acc":val_acc})
     if val_loss < min_loss:
         min_loss = val_loss
         best_model = model.state_dict()
@@ -407,7 +548,10 @@ for epoch in range(1, max_epochs + 1):
     print('Epoch: {}, Training Loss: {}, Validation Loss: {}'.format(epoch, train_loss, val_loss))
 model.load_state_dict(best_model)
 
+plot_learning_curves(metric_history)
 
+test_loss, test_f1 = evaluate_f1(model, test_iter, loss_func)
+test_f1
 
 PAD_IND = TEXT.vocab.stoi['pad']
 
@@ -424,5 +568,3 @@ interpret_sentence(model, 'It is a disgusting movie!', label=0)
 
 print('Visualize attributions based on Integrated Gradients')
 visualization.visualize_text(vis_data_records_ig)
-
-
