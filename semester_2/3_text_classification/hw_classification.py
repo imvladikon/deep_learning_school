@@ -1,19 +1,28 @@
 import pandas as pd
 import numpy as np
 import torch
+import matplotlib.pyplot as plt
 
-from torchtext import datasets
+import numpy as np
 
-from torchtext.data import Field, LabelField
-from torchtext.data import BucketIterator
+try:
+  from torchtext import datasets
+  from torchtext.data import Field, LabelField
+  from torchtext.data import BucketIterator
+except:
+  from torchtext.legacy import datasets
+  from torchtext.legacy.data import Field, LabelField
+  from torchtext.legacy.data import BucketIterator
 
 from torchtext.vocab import Vectors, GloVe
-
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import random
 from tqdm.autonotebook import tqdm
+
+import warnings
+warnings.filterwarnings('ignore')
 
 TEXT = Field(sequential=True, lower=True, include_lengths=True)  # Поле текста
 LABEL = LabelField(dtype=torch.float)  # Поле метки
@@ -36,6 +45,99 @@ train_iter, valid_iter, test_iter = BucketIterator.splits(
     batch_size = 64,
     sort_within_batch = True,
     device = device)
+
+def binary_accuracy(preds, y):
+    rounded_preds = torch.round(torch.sigmoid(preds))
+    correct = (rounded_preds == y).float()
+    acc = correct.sum() / len(correct)
+    return acc
+
+class F1_Loss(nn.Module):
+    '''
+    The original implmentation is written by Michal Haltuf on Kaggle.
+    
+    Reference
+    ---------
+    - https://www.kaggle.com/rejpalcz/best-loss-function-for-f1-score-metric
+    '''
+    def __init__(self, epsilon=1e-7):
+        super().__init__()
+        self.epsilon = epsilon
+        
+    def forward(self, y_true, y_pred, return_pr=False):
+        assert y_pred.ndim == 2, y_pred.shape
+        assert y_true.ndim == 1, y_true.shape
+        y_true = F.one_hot(y_true.long(), 2).to(torch.float32)
+        y_pred = F.softmax(y_pred, dim=1)
+        
+        tp = (y_true * y_pred).sum(dim=0).to(torch.float32)
+        tn = ((1 - y_true) * (1 - y_pred)).sum(dim=0).to(torch.float32)
+        fp = ((1 - y_true) * y_pred).sum(dim=0).to(torch.float32)
+        fn = (y_true * (1 - y_pred)).sum(dim=0).to(torch.float32)
+
+        precision = tp / (tp + fp + self.epsilon)
+        recall = tp / (tp + fn + self.epsilon)
+
+        f1 = 2* (precision*recall) / (precision + recall + self.epsilon)
+        f1 = f1.clamp(min=self.epsilon, max=1-self.epsilon)
+        if not return_pr:
+          return 1 - f1.mean()
+        else:
+          return 1 - f1.mean(), precision.mean(), recall.mean()
+
+
+@torch.no_grad()
+def f1_score(y_true, y_pred):
+  f1_loss = F1_Loss().to(device)
+  return f1_loss(y_true, y_pred)
+
+@torch.no_grad()
+def test_evaluating(model, iterator, criterion):
+    test_loss = 0.
+    test_acc = 0.
+    test_f1 = 0.
+    test_precision = 0.
+    test_recall = 0.
+    f1_loss = F1_Loss().to(device)
+    model.eval()
+    for batch in iterator:
+        if isinstance(batch.text, tuple):
+          text, text_lengths = batch.text
+          predictions = model(text, text_lengths)
+        else:
+          text = batch.text
+          predictions = model(text)
+        y_true = batch.label
+        loss = criterion(predictions.squeeze(1), y_true)
+        f1, precision, recall = f1_loss(y_true, predictions, return_pr=True)
+        acc = binary_accuracy(predictions.squeeze(1), y_true)
+        test_loss += loss.item()
+        test_acc += acc.item()
+        test_f1 += f1.item()
+        test_precision += precision.item()
+        test_recall += recall.item()
+    return {
+        "test_loss": test_loss / len(iterator), 
+        "test_acc": test_acc / len(iterator), 
+        "test_f1": test_f1 / len(iterator),
+        "test_precision": test_precision / len(iterator),
+        "test_recall": test_recall / len(iterator)
+    }
+
+def plot_learning_curves(metric_history, title=""):
+    with plt.style.context('seaborn-whitegrid'):
+      fig,ax = plt.subplots(1,2, figsize=(16, 6))
+      train_history = pd.DataFrame(metric_history["train"]).reset_index()
+      val_history = pd.DataFrame(metric_history["val"]).reset_index()
+      train_history.plot(x="epoch", y="acc", ax=ax[0], color="r", label="acc_train") 
+      val_history.plot(x="epoch", y="acc", ax=ax[0], color="b", label="acc_val")
+      train_history.plot(x="epoch", y="loss", color="r", ax=ax[1], label="loss_train")
+      val_history.plot(x="epoch", y="loss", color="b", ax=ax[1], label="loss_val")
+      ax[0].set_title(f'Train Acc: {train_history.iloc[-1]["acc"]:.4f} Val Acc: {val_history.iloc[-1]["acc"]:.4f}')
+      ax[1].set_title(f'Train Loss: {train_history.iloc[-1]["loss"]:.4f} Val Loss: {val_history.iloc[-1]["loss"]:.4f}')
+      if not title:
+        fig.suptitle(title)
+      plt.show();
 
 class RNNBaseline(nn.Module):
     def __init__(self, vocab_size, embedding_dim, hidden_dim, output_dim, n_layers, 
@@ -106,40 +208,32 @@ model = RNNBaseline(
     bidirectional=bidirectional,
     dropout=dropout,
     pad_idx=PAD_IDX
-)
+).to(device)
 
-model = model.to(device)
-
-opt = torch.optim.Adam(model.parameters())
+optimizer = torch.optim.Adam(model.parameters())
 loss_func = nn.BCEWithLogitsLoss()
-
 max_epochs = 20
-
-import numpy as np
-
 min_loss = np.inf
-optimizer = opt
+max_f1 = 0
 criterion=loss_func
 cur_patience = 0
 max_grad_norm = 2
 metric_history = {"train":[], "val":[]} 
 
-def binary_accuracy(preds, y):
-    rounded_preds = torch.round(torch.sigmoid(preds))
-    correct = (rounded_preds == y).float()
-    acc = correct.sum() / len(correct)
-    return acc
 
 for epoch in range(1, max_epochs + 1):
     train_loss = 0.0
     train_acc = 0.0
+    train_f1 = 0.0
     model.train()
     pbar = tqdm(enumerate(train_iter), total=len(train_iter), leave=False)
     pbar.set_description(f"Epoch {epoch}")
     for it, batch in pbar: 
         optimizer.zero_grad()
         text, text_lengths = batch.text
-        predictions = model(text, text_lengths).squeeze(1)
+        predictions = model(text, text_lengths)
+        f1 = f1_score(batch.label, predictions)
+        predictions = predictions.squeeze(1)
         loss = criterion(predictions, batch.label)
         acc = binary_accuracy(predictions, batch.label)
         loss.backward()
@@ -148,27 +242,37 @@ for epoch in range(1, max_epochs + 1):
         optimizer.step()
         train_loss += loss.item()
         train_acc += acc.item()
+        train_f1 += f1.item()
 
     train_loss /= len(train_iter)
     train_acc /= len(train_iter)
-    metric_history["train"].append({"epoch": epoch,"loss":train_loss, "acc":train_acc})
+    train_f1 /= len(train_iter)
+    metric_history["train"].append({"epoch": epoch,"loss":train_loss, "acc":train_acc, "f1":train_f1})
     val_loss = 0.0
     val_acc = 0.0
+    val_f1 = 0.0
     model.eval()
     pbar = tqdm(enumerate(valid_iter), total=len(valid_iter), leave=False)
     pbar.set_description(f"Epoch {epoch}")
     for it, batch in pbar:
         text, text_lengths = batch.text
-        predictions = model(text, text_lengths).squeeze(1)
+        predictions = model(text, text_lengths)
+        f1 = f1_score(batch.label, predictions)
+        predictions = predictions.squeeze(1)
         loss = criterion(predictions, batch.label)
         acc = binary_accuracy(predictions, batch.label)
         val_loss += loss.item()
         val_acc += acc.item()
+        val_f1 += f1.item()
     val_loss /= len(valid_iter)
     val_acc /= len(valid_iter)
-    metric_history["val"].append({"epoch": epoch,"loss":val_loss, "acc":val_acc})
-    if val_loss < min_loss:
-        min_loss = val_loss
+    val_f1 /= len(valid_iter)
+    metric_history["val"].append({"epoch": epoch,"loss":val_loss, "acc":val_acc, "f1":val_f1})
+    # if val_loss < min_loss:
+    #     min_loss = val_loss
+    #     best_model = model.state_dict()
+    if val_f1 > max_f1:
+        max_f1 = val_f1
         best_model = model.state_dict()
     else:
         cur_patience += 1
@@ -176,48 +280,13 @@ for epoch in range(1, max_epochs + 1):
             cur_patience = 0
             break
     
-    print('Epoch: {}, Training Loss: {}, Validation Loss: {}'.format(epoch, train_loss, val_loss))
+    print('Epoch: {}, train loss: {}, val loss: {}, train acc: {}, val acc: {}, train f1: {}, val f1: {}'.format(epoch, train_loss, val_loss, train_acc, val_acc, train_f1, val_f1))
 model.load_state_dict(best_model)
-
-import matplotlib.pyplot as plt
-
-def plot_learning_curves(metric_history, title=""):
-    with plt.style.context('seaborn-whitegrid'):
-      fig,ax = plt.subplots(1,2, figsize=(16, 6))
-      train_history = pd.DataFrame(metric_history["train"]).reset_index()
-      val_history = pd.DataFrame(metric_history["val"]).reset_index()
-      train_history.plot(x="epoch", y="acc", ax=ax[0], color="r", label="acc_train") 
-      val_history.plot(x="epoch", y="acc", ax=ax[0], color="b", label="acc_val")
-      train_history.plot(x="epoch", y="loss", color="r", ax=ax[1], label="loss_train")
-      val_history.plot(x="epoch", y="loss", color="b", ax=ax[1], label="loss_val")
-      ax[0].set_title(f'Train Acc: {train_history.iloc[-1]["acc"]:.4f} Val Acc: {val_history.iloc[-1]["acc"]:.4f}')
-      ax[1].set_title(f'Train Loss: {train_history.iloc[-1]["loss"]:.4f} Val Loss: {val_history.iloc[-1]["loss"]:.4f}')
-      if not title:
-        fig.suptitle(title)
-      plt.show();
 
 plot_learning_curves(metric_history)
 
-from sklearn.metrics import f1_score
-
-def evaluate_f1(model, iterator, criterion):
-    epoch_loss = 0
-    epoch_acc = 0
-    model.eval()
-    with torch.no_grad():
-        for batch in iterator:
-            text, text_lengths = batch.text
-            predictions = model(text, text_lengths).squeeze(1)
-            loss = criterion(predictions, batch.label)
-            y_true = batch.label
-            y_pred = torch.round(torch.sigmoid(predictions))
-            acc = f1_score(y_true.detach().cpu().numpy(), y_pred.detach().cpu().numpy())
-            epoch_loss += loss.item()
-            epoch_acc += acc.item()
-    return epoch_loss / len(iterator), epoch_acc / len(iterator)
-
-test_loss, test_f1 = evaluate_f1(model, test_iter, criterion)
-test_f1
+metrics = test_evaluating(model, test_iter, criterion)
+metrics["test_f1"]
 
 TEXT = Field(sequential=True, lower=True, batch_first=True)  # batch_first тк мы используем conv  
 LABEL = LabelField(batch_first=True, dtype=torch.float)
@@ -248,6 +317,7 @@ class CNN(nn.Module):
         out_channels,
         kernel_sizes,
         dropout=0.5,
+        dim = 300
     ):
         super().__init__()
 
@@ -262,6 +332,7 @@ class CNN(nn.Module):
         self.fc = nn.Linear(len(kernel_sizes) * out_channels, 1)
         
         self.dropout = nn.Dropout(dropout)
+        # self.init_weights()
         
         
     def forward(self, text):
@@ -281,6 +352,19 @@ class CNN(nn.Module):
         cat = self.dropout(torch.cat((pooled_0, pooled_1, pooled_2), dim=1))
             
         return self.fc(cat)
+    
+    def init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.xavier_uniform_(m.weight.data)
+                if m.bias is not None:
+                    m.bias.data.zero_()
+            elif isinstance(m, nn.BatchNorm2d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+            elif isinstance(m, nn.Linear):
+                m.weight.data.normal_(0, 0.01)
+                m.bias.data.zero_()
 
 kernel_sizes = [3, 4, 5]
 vocab_size = len(TEXT.vocab)
@@ -289,60 +373,66 @@ dropout = 0.5
 dim = 300
 
 model = CNN(vocab_size=vocab_size, emb_dim=dim, out_channels=out_channels,
-            kernel_sizes=kernel_sizes, dropout=dropout)
-
-model.to(device)
-
-opt = torch.optim.Adam(model.parameters())
-loss_func = nn.BCEWithLogitsLoss()
-
-max_epochs = 30
-
-import numpy as np
+            kernel_sizes=kernel_sizes, dropout=dropout).to(device)
 
 min_loss = np.inf
+max_f1 = 0
 metric_history = {"train":[], "val":[]} 
 cur_patience = 0
 
+max_epochs = 30
+optimizer = torch.optim.Adam(model.parameters())
+loss_func = nn.BCEWithLogitsLoss()
+
 for epoch in range(1, max_epochs + 1):
     train_loss = 0.0
-    train_acc = 0
+    train_acc = 0.0
+    train_f1 = 0.0
     model.train()
     pbar = tqdm(enumerate(train_iter), total=len(train_iter), leave=False)
     pbar.set_description(f"Epoch {epoch}")
     for it, batch in pbar: 
         optimizer.zero_grad()
         text = batch.text
-        predictions = model(text).squeeze(1)
+        predictions = model(text)
+        f1 = f1_score(batch.label, predictions)
+        predictions = predictions.squeeze(1)
         loss = criterion(predictions, batch.label)
         acc = binary_accuracy(predictions, batch.label)
         loss.backward()
         optimizer.step()
         train_loss += loss.item()
         train_acc += acc.item()
+        train_f1 += f1.item()
 
     train_loss /= len(train_iter)
     train_acc /= len(train_iter)
-    metric_history["train"].append({"epoch": epoch,"loss":train_loss, "acc":train_acc})
-    val_loss = 0.0
-    train_loss = 0.0
-    model.eval()
+    train_f1 /= len(train_iter)
+    metric_history["train"].append({"epoch": epoch,"loss":train_loss, "acc":train_acc, "f1":train_f1})
     
+    val_loss = 0.0
+    val_acc = 0.0
+    val_f1 = 0.0
+    model.eval()
     pbar = tqdm(enumerate(val_iter), total=len(val_iter), leave=False)
     pbar.set_description(f"Epoch {epoch}")
     for it, batch in pbar:
         text = batch.text
-        predictions = model(text).squeeze(1)
+        predictions = model(text)
+        f1 = f1_score(batch.label, predictions)
+        predictions = predictions.squeeze(1)
         loss = criterion(predictions, batch.label)
         acc = binary_accuracy(predictions, batch.label)
         val_loss += loss.item()
         val_acc += acc.item()
+        val_f1 += f1.item()
     
     val_loss /= len(val_iter)
     val_acc /= len(val_iter)
-    metric_history["val"].append({"epoch": epoch,"loss":val_loss, "acc":val_acc})
-    if val_loss < min_loss:
-        min_loss = val_loss
+    val_f1 /= len(val_iter)
+    metric_history["val"].append({"epoch": epoch,"loss":val_loss, "acc":val_acc, "f1":val_f1})
+    if val_f1 > max_f1:
+        max_f1 = val_f1
         best_model = model.state_dict()
     else:
         cur_patience += 1
@@ -350,29 +440,85 @@ for epoch in range(1, max_epochs + 1):
             cur_patience = 0
             break
     
-    print('Epoch: {}, Training Loss: {}, Validation Loss: {}'.format(epoch, train_loss, val_loss))
+    print('Epoch: {}, train loss: {}, val loss: {}, train acc: {}, val acc: {}, train f1: {}, val f1: {}'.format(epoch, train_loss, val_loss, train_acc, val_acc, train_f1, val_f1))
 model.load_state_dict(best_model)
 
 plot_learning_curves(metric_history)
 
-def evaluate_f1(model, iterator, criterion):
-    epoch_loss = 0
-    epoch_acc = 0
-    model.eval()
-    with torch.no_grad():
-        for batch in iterator:
-            text = batch.text
-            predictions = model(text).squeeze(1)
-            loss = criterion(predictions, batch.label)
-            y_true = batch.label
-            y_pred = torch.round(torch.sigmoid(predictions))
-            acc = f1_score(y_true.detach().cpu().numpy(), y_pred.detach().cpu().numpy())
-            epoch_loss += loss.item()
-            epoch_acc += acc.item()
-    return epoch_loss / len(iterator), epoch_acc / len(iterator)
+metrics = test_evaluating(model, test_iter, criterion)
+metrics["test_f1"]
 
-test_loss, test_f1 = evaluate_f1(model, test_iter, criterion)
-test_f1
+min_loss = np.inf
+max_f1 = 0
+metric_history = {"train":[], "val":[]} 
+cur_patience = 0
+
+max_epochs = 30
+optimizer = torch.optim.Adam(model.parameters())
+loss_func = F1_Loss()
+
+for epoch in range(1, max_epochs + 1):
+    train_loss = 0.0
+    train_acc = 0.0
+    train_f1 = 0.0
+    model.train()
+    pbar = tqdm(enumerate(train_iter), total=len(train_iter), leave=False)
+    pbar.set_description(f"Epoch {epoch}")
+    for it, batch in pbar: 
+        optimizer.zero_grad()
+        text = batch.text
+        predictions = model(text)
+        f1 = f1_score(batch.label, predictions)
+        predictions = predictions.squeeze(1)
+        loss = criterion(predictions, batch.label)
+        acc = binary_accuracy(predictions, batch.label)
+        loss.backward()
+        optimizer.step()
+        train_loss += loss.item()
+        train_acc += acc.item()
+        train_f1 += f1.item()
+
+    train_loss /= len(train_iter)
+    train_acc /= len(train_iter)
+    train_f1 /= len(train_iter)
+    metric_history["train"].append({"epoch": epoch,"loss":train_loss, "acc":train_acc, "f1":train_f1})
+    
+    val_loss = 0.0
+    val_acc = 0.0
+    val_f1 = 0.0
+    model.eval()
+    pbar = tqdm(enumerate(val_iter), total=len(val_iter), leave=False)
+    pbar.set_description(f"Epoch {epoch}")
+    for it, batch in pbar:
+        text = batch.text
+        predictions = model(text)
+        f1 = f1_score(batch.label, predictions)
+        predictions = predictions.squeeze(1)
+        loss = criterion(predictions, batch.label)
+        acc = binary_accuracy(predictions, batch.label)
+        val_loss += loss.item()
+        val_acc += acc.item()
+        val_f1 += f1.item()
+    
+    val_loss /= len(val_iter)
+    val_acc /= len(val_iter)
+    val_f1 /= len(val_iter)
+    metric_history["val"].append({"epoch": epoch,"loss":val_loss, "acc":val_acc, "f1":val_f1})
+    if val_f1 > max_f1:
+        max_f1 = val_f1
+        best_model = model.state_dict()
+    else:
+        cur_patience += 1
+        if cur_patience == patience:
+            cur_patience = 0
+            break
+    
+    print('Epoch: {}, train loss: {}, val loss: {}, train acc: {}, val acc: {}, train f1: {}, val f1: {}'.format(epoch, train_loss, val_loss, train_acc, val_acc, train_f1, val_f1))
+model.load_state_dict(best_model)
+
+
+metrics = test_evaluating(model, test_iter, criterion)
+metrics["test_f1"]
 
 !pip install -q captum
 
@@ -447,6 +593,9 @@ interpret_sentence(model, 'It was a horrible movie', label=0)
 interpret_sentence(model, 'I\'ve never watched something as bad', label=0)
 interpret_sentence(model, 'It is a disgusting movie!', label=0)
 
+interpret_sentence(model, 'It was not a bad movie!', label=1)
+interpret_sentence(model, 'I would like watch this movie again', label=1)
+
 print('Visualize attributions based on Integrated Gradients')
 visualization.visualize_text(vis_data_records_ig)
 
@@ -482,7 +631,7 @@ train_iter, val_iter, test_iter = BucketIterator.splits(
 )
 
 model = CNN(vocab_size=vocab_size, emb_dim=dim, out_channels=64,
-            kernel_sizes=kernel_sizes, dropout=dropout)
+            kernel_sizes=kernel_sizes, dropout=dropout).to(device)
 
 word_embeddings = TEXT.vocab.vectors
 
@@ -491,53 +640,67 @@ prev_shape = model.embedding.weight.shape
 model.embedding.weight.data.copy_(word_embeddings)
 
 assert prev_shape == model.embedding.weight.shape
-model.to(device)
 
-opt = torch.optim.Adam(model.parameters())
-
-import numpy as np
+optimizer = torch.optim.Adam(model.parameters())
 
 min_loss = np.inf
+max_f1 = 0
 metric_history = {"train":[], "val":[]} 
 cur_patience = 0
+
+max_epochs = 30
+optimizer = torch.optim.Adam(model.parameters())
+loss_func = nn.BCEWithLogitsLoss()
 
 for epoch in range(1, max_epochs + 1):
     train_loss = 0.0
     train_acc = 0.0
+    train_f1 = 0.0
     model.train()
     pbar = tqdm(enumerate(train_iter), total=len(train_iter), leave=False)
     pbar.set_description(f"Epoch {epoch}")
     for it, batch in pbar: 
         optimizer.zero_grad()
         text = batch.text
-        predictions = model(text).squeeze(1)
+        predictions = model(text)
+        f1 = f1_score(batch.label, predictions)
+        predictions = predictions.squeeze(1)
         loss = criterion(predictions, batch.label)
         acc = binary_accuracy(predictions, batch.label)
         loss.backward()
         optimizer.step()
         train_loss += loss.item()
         train_acc += acc.item()
+        train_f1 += f1.item()
 
     train_loss /= len(train_iter)
     train_acc /= len(train_iter)
-    metric_history["train"].append({"epoch": epoch,"loss":train_loss, "acc":train_acc})
+    train_f1 /= len(train_iter)
+    metric_history["train"].append({"epoch": epoch,"loss":train_loss, "acc":train_acc, "f1":train_f1})
+    
     val_loss = 0.0
     val_acc = 0.0
+    val_f1 = 0.0
     model.eval()
     pbar = tqdm(enumerate(val_iter), total=len(val_iter), leave=False)
     pbar.set_description(f"Epoch {epoch}")
     for it, batch in pbar:
         text = batch.text
-        predictions = model(text).squeeze(1)
+        predictions = model(text)
+        f1 = f1_score(batch.label, predictions)
+        predictions = predictions.squeeze(1)
         loss = criterion(predictions, batch.label)
         acc = binary_accuracy(predictions, batch.label)
         val_loss += loss.item()
         val_acc += acc.item()
+        val_f1 += f1.item()
+    
     val_loss /= len(val_iter)
     val_acc /= len(val_iter)
-    metric_history["val"].append({"epoch": epoch,"loss":val_loss, "acc":val_acc})
-    if val_loss < min_loss:
-        min_loss = val_loss
+    val_f1 /= len(val_iter)
+    metric_history["val"].append({"epoch": epoch,"loss":val_loss, "acc":val_acc, "f1":val_f1})
+    if val_f1 > max_f1:
+        max_f1 = val_f1
         best_model = model.state_dict()
     else:
         cur_patience += 1
@@ -545,13 +708,13 @@ for epoch in range(1, max_epochs + 1):
             cur_patience = 0
             break
     
-    print('Epoch: {}, Training Loss: {}, Validation Loss: {}'.format(epoch, train_loss, val_loss))
+    print('Epoch: {}, train loss: {}, val loss: {}, train acc: {}, val acc: {}, train f1: {}, val f1: {}'.format(epoch, train_loss, val_loss, train_acc, val_acc, train_f1, val_f1))
 model.load_state_dict(best_model)
 
 plot_learning_curves(metric_history)
 
-test_loss, test_f1 = evaluate_f1(model, test_iter, loss_func)
-test_f1
+metrics = test_evaluating(model, test_iter, criterion)
+metrics["test_f1"]
 
 PAD_IND = TEXT.vocab.stoi['pad']
 
