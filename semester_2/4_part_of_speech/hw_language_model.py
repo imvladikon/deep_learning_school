@@ -10,14 +10,16 @@
 
 # Мы будем решать задачу определения частей речи (POS-теггинга) с помощью скрытой марковской модели (HMM).
 
-# In[ ]:
+# In[38]:
 
 
 import nltk
+from nltk import FreqDist
 import pandas as pd
 import numpy as np
 from collections import OrderedDict, deque
 from nltk.corpus import brown
+from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 
 
@@ -25,7 +27,7 @@ import matplotlib.pyplot as plt
 
 # Загрузим brown корпус
 
-# In[ ]:
+# In[23]:
 
 
 nltk.download('brown')
@@ -42,7 +44,7 @@ nltk.download('brown')
 
 # На данный момент стандартом является **Universal Dependencies**. Подробнее про проект можно почитать [вот тут](http://universaldependencies.org/), а про теги — [вот тут](http://universaldependencies.org/u/pos/)
 
-# In[ ]:
+# In[24]:
 
 
 nltk.download('universal_tagset')
@@ -53,7 +55,7 @@ nltk.download('universal_tagset')
 
 # Мы имеем массив предложений пар (слово-тег)
 
-# In[ ]:
+# In[25]:
 
 
 brown_tagged_sents = brown.tagged_sents(tagset="universal")
@@ -62,7 +64,7 @@ brown_tagged_sents
 
 # Первое предложение
 
-# In[ ]:
+# In[26]:
 
 
 brown_tagged_sents[0]
@@ -70,7 +72,7 @@ brown_tagged_sents[0]
 
 # Все пары (слово-тег)
 
-# In[ ]:
+# In[27]:
 
 
 brown_tagged_words = brown.tagged_words(tagset='universal')
@@ -79,31 +81,31 @@ brown_tagged_words
 
 # Проанализируйте данные, с которыми Вы работаете. Используйте `nltk.FreqDist()` для подсчета частоты встречаемости тега и слова в нашем корпусе. Под частой элемента подразумевается кол-во этого элемента в корпусе.
 
-# In[ ]:
+# In[28]:
 
 
 # Приведем слова к нижнему регистру
 brown_tagged_words = list(map(lambda x: (x[0].lower(), x[1]), brown_tagged_words))
 
 
-# In[ ]:
+# In[29]:
 
 
 print('Кол-во предложений: ', len(brown_tagged_sents))
 tags = [tag for (word, tag) in brown_tagged_words] # наши теги
 words = [word for (word, tag) in brown_tagged_words] # наши слова
 
-tag_num = pd.Series('''your code''').sort_values(ascending=False) # тег - кол-во тега в корпусе
-word_num = pd.Series('''your code''').sort_values(ascending=False) # слово - кол-во слова в корпусе
+tag_num = pd.Series(FreqDist(tags)).sort_values(ascending=False) # тег - кол-во тега в корпусе
+word_num = pd.Series(FreqDist(words)).sort_values(ascending=False) # слово - кол-во слова в корпусе
 
 
-# In[ ]:
+# In[30]:
 
 
 tag_num
 
 
-# In[ ]:
+# In[31]:
 
 
 plt.figure(figsize=(12, 5))
@@ -112,13 +114,13 @@ plt.title("Tag_frequency")
 plt.show()
 
 
-# In[ ]:
+# In[32]:
 
 
 word_num[:5]
 
 
-# In[ ]:
+# In[33]:
 
 
 plt.figure(figsize=(12, 5))
@@ -130,26 +132,28 @@ plt.show()
 # ### Вопрос 1:
 # * Кол-во слова `cat` в корпусе?
 
-# In[ ]:
+# In[34]:
 
 
-'''your code'''
+word_num['cat']
 
 
 # ### Вопрос 2:
 # * Самое популярное слово с самым популярным тегом? <br>(*сначала выбираете слова с самым популярным тегом, а затем выбираете самое популярное слово из уже выбранных*)
 
-# In[ ]:
+# In[68]:
 
 
-'''your code'''
+tag = FreqDist(tags).max()
+MOST_POPULAR_WORD_TAG = FreqDist(filter(lambda t:t[1]==tag, brown_tagged_words)).max()
+MOST_POPULAR_WORD_TAG
 
 
 # Впоследствии обучение моделей может занимать слишком много времени, работайте с подвыборкой, например, только текстами определенных категорий.
 
 # Категории нашего корпуса:
 
-# In[ ]:
+# In[36]:
 
 
 brown.categories()
@@ -159,7 +163,7 @@ brown.categories()
 
 # Cделайте случайное разбиение выборки на обучение и контроль в отношении 9:1. 
 
-# In[ ]:
+# In[39]:
 
 
 brown_tagged_sents = brown.tagged_sents(tagset="universal", categories='humor')
@@ -169,17 +173,16 @@ for sent in brown_tagged_sents:
     my_brown_tagged_sents.append(list(map(lambda x: (x[0].lower(), x[1]), sent)))
 my_brown_tagged_sents = np.array(my_brown_tagged_sents)
 
-from sklearn.model_selection import train_test_split
-train_sents, test_sents = train_test_split('''your code''', random_state=0,)
+train_sents, test_sents = train_test_split(my_brown_tagged_sents, random_state=0, test_size=0.1)
 
 
-# In[ ]:
+# In[40]:
 
 
 len(train_sents)
 
 
-# In[ ]:
+# In[41]:
 
 
 len(test_sents)
@@ -225,13 +228,12 @@ len(test_sents)
 # $$(1)\: \normalsize q_{t,s} = \max_{s'} q_{t - 1, s'} \cdot p(s | s') \cdot p(o_t | s)$$
 # $\normalsize Q_{t,s}$ можно восстановить по argmax-ам.
 
-# In[ ]:
+# In[69]:
 
 
 class HiddenMarkovModel:    
-    def __init__(self):
-    
-        pass
+    def __init__(self, most_popular_word_tag=None):
+        self.most_popular_word_tag = most_popular_word_tag if most_popular_word_tag is not None else MOST_POPULAR_WORD_TAG
         
     def fit(self, train_tokens_tags_list):
         """
@@ -242,12 +244,13 @@ class HiddenMarkovModel:
         words = [word for sent in train_tokens_tags_list
                  for (word, tag) in sent]
         
-        tag_num = pd.Series('''your code''').sort_index()
-        word_num = pd.Series('''your code''').sort_values(ascending=False)
+        tag_num = pd.Series(FreqDist(tags)).sort_index()
+        word_num = pd.Series(FreqDist(words)).sort_values(ascending=False)
          
         self.tags = tag_num.index
         self.words = word_num.index
-        
+
+         
         A = pd.DataFrame({'{}'.format(tag) : [0] * len(tag_num) for tag in tag_num.index}, index=tag_num.index)
         B = pd.DataFrame({'{}'.format(tag) : [0] * len(word_num) for tag in tag_num.index}, index=word_num.index)
         
@@ -257,7 +260,7 @@ class HiddenMarkovModel:
         # sent[i][0] - i слово в этом предложении, sent[i][1] - i тег в этом предложении
         for sent in train_tokens_tags_list:
             for i in range(len(sent)):
-                B.loc['''your code'''] += 1 # текущая i-пара слово-тег (обновите матрицу B аналогично A)
+                B.loc[sent[i][0], sent[i][1]] += 1 # текущая i-пара слово-тег (обновите матрицу B аналогично A)
                 if len(sent) - 1 != i: # для последнего тега нет следующего тега
                     A.loc[sent[i][1], sent[i + 1][1]] += 1 # пара тег-тег
                 
@@ -272,7 +275,7 @@ class HiddenMarkovModel:
         
         self.A = A
         self.B = B
-        
+
         return self
         
     
@@ -296,7 +299,7 @@ class HiddenMarkovModel:
                 # если мы не встречали такое слово в обучении, то вместо него будет 
                 # самое популярное слово с самым популярным тегом (вопрос 2)
                 if current_sent[t] not in self.words:
-                    current_sent[t] = '''your code'''
+                    current_sent[t] = self.most_popular_word_tag[0]
                     
                 # через max выбираем следующий тег
                 for i_s in range(len(self.tags)):
@@ -304,14 +307,14 @@ class HiddenMarkovModel:
                     s = self.tags[i_s]
                     
                     # формула (1)
-                    q[t + 1][i_s] = np.max(q['''your code'''] *
-                        self.A.loc[:, '''your code'''] * 
+                    q[t + 1][i_s] =  np.max(q[t] *
+                        self.A.loc[:, s] * 
                         self.B.loc[current_sent[t], s])
                     
                     # argmax формула(1)
                     
                     # argmax, чтобы восстановить последовательность тегов
-                    back_point[t + 1][i_s] = (q['''your code'''] * self.A.loc[:, '''your code'''] * 
+                    back_point[t + 1][i_s] = (q[t] * self.A.loc[:, s] * 
                         self.B.loc[current_sent[t],s]).reset_index()[s].idxmax() # индекс 
                     
             back_point = back_point.astype('int')
@@ -331,11 +334,11 @@ class HiddenMarkovModel:
 
 # Обучите скрытую марковскую модель:
 
-# In[ ]:
+# In[70]:
 
 
-# my_model = ..,
-'''your code'''
+my_model = HiddenMarkovModel()
+my_model.fit(train_sents)
 
 
 # Проверьте работу реализованного алгоритма на следующих модельных примерах, проинтерпретируйте результат.
@@ -345,35 +348,47 @@ class HiddenMarkovModel:
 # - 'I have a television'
 # - 'My favourite character'
 
-# In[ ]:
+# In[71]:
 
 
 sents = [['He', 'can', 'stay'], ['a', 'cat', 'and', 'a', 'dog'], ['I', 'have', 'a', 'television'],
          ['My', 'favourite', 'character']]
-'''your code'''
+my_model.predict(sents)
 
+
+# In[72]:
+
+
+my_model.predict([["Colorless", "green", "ideas", "sleep", "furiously"]])
+
+
+# как видим для простых кейсов работает неплохо. но на сложных везде NOUN;)
 
 # ### Вопрос 3:
 # * Какой тег вы получили для слова `can`?
 
-# In[ ]:
+# VERB, но можно и отдельно проверить
+
+# In[73]:
 
 
-'''your code'''
+my_model.predict([['can']])
 
 
 # ### Вопрос 4:
 # * Какой тег вы получили для слова `favourite`?
 
-# In[ ]:
+# NOUN , но давайте в отрыве от контекста проверим
+
+# In[74]:
 
 
-'''your code'''
+my_model.predict([['favourite']])
 
 
 # Примените модель к отложенной выборке Брауновского корпуса и подсчитайте точность определения тегов (accuracy). Сделайте выводы. 
 
-# In[ ]:
+# In[75]:
 
 
 def accuracy_score(model, sents):
@@ -381,13 +396,14 @@ def accuracy_score(model, sents):
     num_pred = 0
 
     for sent in sents:
-        tags = '''your code'''
-        words = '''your code'''
+        nn = np.array(sent)
+        tags = nn[:,1]
+        words = nn[:,0]
 
-        '''your code'''
+        outputs = model.predict([words])[0]
 
-        true_pred += '''your code'''
-        num_pred += '''your code'''
+        true_pred += np.sum(outputs == tags)
+        num_pred += len(outputs)
     print("Accuracy:", true_pred / num_pred * 100, '%')
 
 
@@ -413,17 +429,30 @@ accuracy_score(my_model, test_sents)
 
 # Вы можете испоьзовать DefaultTagger(метод tag для предсказания частей речи предложения)
 
-# In[ ]:
+# In[77]:
 
 
 from nltk.tag import DefaultTagger
-default_tagger = DefaultTagger('''your code''')
+default_tagger = DefaultTagger("NOUN")
 
 
-# In[ ]:
+# In[78]:
 
 
-'''your code'''
+true_pred = 0
+num_pred = 0
+
+for sent in test_sents:
+    tags = np.array([tag for (word, tag) in sent])
+    words = np.array([word for (word, tag) in sent])
+    
+    tagged_sent = default_tagger.tag(words)
+    outputs = [tag for token, tag in tagged_sent]
+    
+    true_pred += np.sum(outputs == tags)
+    num_pred += len(words)
+    
+print("Accuracy:", true_pred / num_pred * 100, '%')
 
 
 # ## NLTK, Rnnmorph
@@ -432,7 +461,7 @@ default_tagger = DefaultTagger('''your code''')
 # 
 # Не забудьте преобразовать систему тэгов из `'en-ptb' в 'universal'` с помощью функции `map_tag` или используйте `tagset='universal'`
 
-# In[ ]:
+# In[79]:
 
 
 from nltk.tag.mapping import map_tag
@@ -470,7 +499,7 @@ predictor = RNNMorphPredictor(language="en")
 
 # Изменим структуру данных
 
-# In[ ]:
+# In[80]:
 
 
 pos_data = [list(zip(*sent)) for sent in brown_tagged_sents]
@@ -479,25 +508,29 @@ print(pos_data[0])
 
 # До этого мы писали много кода сами, теперь пора эксплуатировать pytorch
 
-# In[ ]:
+# In[86]:
 
 
-from torchtext.data import Field, BucketIterator
 import torchtext
+try:
+  from torchtext.data import Field, BucketIterator, Example, Dataset
+except:
+  from torchtext.legacy.data import Field, BucketIterator, Example, Dataset
+
 
 # наши поля
 WORD = Field(lower=True)
-TAG = Field(unk_token=None) # все токены нам извсетны
+TAG = Field(unk_token=None) # все токены нам известны
 
 # создаем примеры
 examples = []
 for words, tags in pos_data:
-    examples.append(torchtext.data.Example.fromlist([list(words), list(tags)], fields=[('words', WORD), ('tags', TAG)]))
+    examples.append(Example.fromlist([list(words), list(tags)], fields=[('words', WORD), ('tags', TAG)]))
 
 
 # Вот один наш пример:
 
-# In[ ]:
+# In[84]:
 
 
 print(vars(examples[0]))
@@ -505,11 +538,11 @@ print(vars(examples[0]))
 
 # Теперь формируем наш датасет
 
-# In[ ]:
+# In[90]:
 
 
 # кладем примеры в наш датасет
-dataset = torchtext.data.Dataset('''your code''', fields=[('words', WORD), ('tags', TAG)])
+dataset = Dataset(examples, fields=[('words', WORD), ('tags', TAG)])
 
 train_data, valid_data, test_data = dataset.split(split_ratio=[0.8, 0.1, 0.1])
 
@@ -520,11 +553,11 @@ print(f"Number of testing examples: {len(test_data.examples)}")
 
 # Построим словари. Параметр `min_freq` выберете сами. При построении словаря испольузем только **train**
 
-# In[ ]:
+# In[91]:
 
 
-WORD.build_vocab('''your code''', min_freq='''your code''')
-TAG.build_vocab('''your code''')
+WORD.build_vocab(train_data, min_freq=1)
+TAG.build_vocab(train_data)
 
 print(f"Unique tokens in source (ru) vocabulary: {len(WORD.vocab)}")
 print(f"Unique tokens in target (en) vocabulary: {len(TAG.vocab)}")
@@ -533,7 +566,7 @@ print(WORD.vocab.itos[::200])
 print(TAG.vocab.itos)
 
 
-# In[ ]:
+# In[92]:
 
 
 print(vars(train_data.examples[9]))
@@ -541,7 +574,7 @@ print(vars(train_data.examples[9]))
 
 # Посмотрим с насколько большими предложениями мы имеем дело
 
-# In[ ]:
+# In[93]:
 
 
 length = map(len, [vars(x)['words'] for x in train_data.examples])
@@ -553,7 +586,7 @@ plt.hist(list(length), bins=20);
 
 # Для обучения `BiLSTM` лучше использовать colab
 
-# In[ ]:
+# In[94]:
 
 
 import torch
@@ -567,7 +600,7 @@ device
 
 # Для более быстрого и устойчивого обучения сгруппируем наши данные по батчам
 
-# In[ ]:
+# In[95]:
 
 
 # бьем нашу выборку на батч, не забывая сначала отсортировать выборку по длине
@@ -584,10 +617,10 @@ train_iterator, valid_iterator, test_iterator = BucketIterator.splits(
 )
 
 
-# In[ ]:
+# In[96]:
 
 
-# посморим  на количество батчей
+# посмотрим  на количество батчей
 list(map(len, [train_iterator, valid_iterator, test_iterator]))
 
 
@@ -595,7 +628,7 @@ list(map(len, [train_iterator, valid_iterator, test_iterator]))
 
 # Инициализируем нашу модель
 
-# In[ ]:
+# In[97]:
 
 
 class LSTMTagger(nn.Module):
@@ -604,36 +637,36 @@ class LSTMTagger(nn.Module):
         super().__init__()
         
   
-        self.embeddings = '''your code'''
-        self.dropout = '''your code'''
+        self.embeddings = nn.Embedding(input_dim, emb_dim)
+        self.dropout = nn.Dropout(p=dropout)
         
-        self.rnn = '''your code'''
+        self.rnn = nn.LSTM(emb_dim, hid_dim, num_layers=2, bidirectional=bidirectional)
         # если bidirectional, то предсказываем на основе конкатенации двух hidden
         self.tag = nn.Linear((1 + bidirectional) * hid_dim, output_dim)
+        
 
     def forward(self, sent):
         
         #sent = [sent len, batch size] 
         
         # не забываем применить dropout к embedding
-        embedded = '''your code'''
+        embedded = self.dropout(self.embeddings(sent))
 
-        output, _ = '''your code'''
+        output, _ = self.rnn(embedded)
         #output = [sent len, batch size, hid dim * n directions]
 
-        prediction = '''your code'''
+        prediction = self.tag(output)
     
         return prediction
         
 # параметры модели
-INPUT_DIM = '''your code'''
-OUTPUT_DIM = '''your code'''
-EMB_DIM = '''your code'''
-HID_DIM = '''your code'''
-DROPOUT = '''your code'''
-BIDIRECTIONAL = '''your code'''
-
-model = LSTMTagger('''your code''').to(device)
+INPUT_DIM = len(WORD.vocab)
+OUTPUT_DIM = len(TAG.vocab)
+EMB_DIM = 100
+HID_DIM = 128
+DROPOUT = 0.3
+BIDIRECTIONAL = True
+model = LSTMTagger(INPUT_DIM, EMB_DIM, HID_DIM, OUTPUT_DIM, DROPOUT, BIDIRECTIONAL).to(device)
 
 # инициализируем веса
 def init_weights(m):
@@ -645,18 +678,18 @@ model.apply(init_weights)
 
 # Подсчитаем количество обучаемых параметров нашей модели
 
-# In[ ]:
+# In[98]:
 
 
 def count_parameters(model):
-    return '''your code'''
+    return sum(param.numel() for param in model.parameters() if param.requires_grad)
 
 print(f'The model has {count_parameters(model):,} trainable parameters')
 
 
 # Погнали обучать
 
-# In[ ]:
+# In[100]:
 
 
 PAD_IDX = TAG.vocab.stoi['<pad>']
@@ -670,22 +703,22 @@ def train(model, iterator, optimizer, criterion, clip, train_history=None, valid
     history = []
     for i, batch in enumerate(iterator):
         
-       '''your code'''
+        words, tags = batch.words, batch.tags  
         
         optimizer.zero_grad()
         
-        output = model('''your code''')
+        output = model(words)
         
         #tags = [sent len, batch size]
         #output = [sent len, batch size, output dim]
         
-        output = '''your code'''
+        output = output.view(-1, output.shape[-1])
         tags = tags.view(-1)
         
         #tags = [sent len * batch size]
         #output = [sent len * batch size, output dim]
         
-        loss = criterion('''your code''')
+        loss = criterion(output, tags)
         
         loss.backward()
         
@@ -728,20 +761,20 @@ def evaluate(model, iterator, criterion):
     
         for i, batch in enumerate(iterator):
 
-            '''your code'''
+            words, tags = batch.words, batch.tags  
 
-            output = model('''your code''')
+            output = model(words)
 
             #tags = [sent len, batch size]
             #output = [sent len, batch size, output dim]
 
-            output = '''your code'''
+            output = output.view(-1, output.shape[-1])
             tags = tags.view(-1)
 
             #tags = [sent len * batch size]
             #output = [sent len * batch size, output dim]
 
-            loss = criterion('''your code''')
+            loss = criterion(output, tags)
             
             epoch_loss += loss.item()
         
@@ -754,7 +787,7 @@ def epoch_time(start_time, end_time):
     return elapsed_mins, elapsed_secs
 
 
-# In[ ]:
+# In[101]:
 
 
 import time
@@ -768,8 +801,8 @@ from IPython.display import clear_output
 train_history = []
 valid_history = []
 
-N_EPOCHS = '''your code'''
-CLIP = '''your code'''
+N_EPOCHS = 15
+CLIP = 1
 
 best_valid_loss = float('inf')
 
@@ -797,7 +830,7 @@ for epoch in range(N_EPOCHS):
 
 # ### Применение модели
 
-# In[ ]:
+# In[102]:
 
 
 def accuracy_model(model, iterator):
@@ -809,12 +842,11 @@ def accuracy_model(model, iterator):
     with torch.no_grad():
         for i, batch in enumerate(iterator):
 
-           '''your code'''
-
-            output = model('''your code''')
+            words, tags = batch.words, batch.tags
+            output = model(words)
             
             #output = [sent len, batch size, output dim]
-            output = '''your code'''
+            output = output.argmax(-1)
             
             #output = [sent len, batch size]
             predict_tags = output.cpu().numpy()
@@ -826,7 +858,7 @@ def accuracy_model(model, iterator):
     return round(true_pred / num_pred * 100, 3)
 
 
-# In[ ]:
+# In[103]:
 
 
 print("Accuracy:", accuracy_model(model, test_iterator), '%')
@@ -842,17 +874,17 @@ print("Accuracy:", accuracy_model(model, test_iterator), '%')
 
 # Вам неоходимо добиться качества не меньше, чем `accuracy = 93 %` 
 
-# In[ ]:
+# In[105]:
 
 
 best_model = LSTMTagger(INPUT_DIM, EMB_DIM, HID_DIM, OUTPUT_DIM, DROPOUT, BIDIRECTIONAL).to(device)
 best_model.load_state_dict(torch.load('best-val-model.pt'))
-assert accuracy_model(best_model, test_iterator) >= 93
+assert accuracy_model(best_model, test_iterator) >= 93, accuracy_model(best_model, test_iterator)
 
 
 # Пример решение нашей задачи:
 
-# In[ ]:
+# In[106]:
 
 
 def print_tags(model, data):
@@ -869,7 +901,7 @@ def print_tags(model, data):
             print(f'{token:15s}{tag}')
 
 
-# In[ ]:
+# In[107]:
 
 
 print_tags(model, pos_data[-1])
