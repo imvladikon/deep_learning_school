@@ -17,4 +17,5 @@ tasks and projects from the deep learning school [course](https://stepik.org/cou
 
 ### Part-Of-Speech Tagger
 [![seminar](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/imvladikon/deep_learning_school/blob/master/semester_2/4_part_of_speech/language_modeling_seminar.ipynb)
+[![seminar](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/imvladikon/deep_learning_school/blob/master/semester_2/4_part_of_speech/seminar_text_preprocessing_and_classification.ipynb)
 [![hw](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/imvladikon/deep_learning_school/blob/master/semester_2/4_part_of_speech/hw_language_model.ipynb)
