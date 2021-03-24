@@ -65,7 +65,7 @@
 # 
 # Write down some summary on your experiments and illustrate it with convergence plots/metrics and your thoughts. Just like you would approach a real problem.
 
-# In[ ]:
+# In[1]:
 
 
 get_ipython().system(' wget https://drive.google.com/uc?id=1NWYqJgeG_4883LINdEjKUr6nLQPY6Yb_ -O data.txt')
@@ -74,7 +74,7 @@ get_ipython().system(' wget https://drive.google.com/uc?id=1NWYqJgeG_4883LINdEjK
 # (who thanks tilda and deephack teams for the data in their turn)
 
 
-# In[ ]:
+# In[2]:
 
 
 import torch
@@ -102,7 +102,7 @@ from nltk.tokenize import WordPunctTokenizer
 
 # We'll set the random seeds for deterministic results.
 
-# In[ ]:
+# In[3]:
 
 
 SEED = 1234
@@ -118,7 +118,7 @@ torch.backends.cudnn.deterministic = True
 # 
 # Here comes the preprocessing
 
-# In[ ]:
+# In[4]:
 
 
 tokenizer_W = WordPunctTokenizer()
@@ -130,7 +130,7 @@ def tokenize_en(x, tokenizer=tokenizer_W):
     return tokenizer.tokenize(x.lower())
 
 
-# In[ ]:
+# In[5]:
 
 
 SRC = Field(tokenize=tokenize_ru,
@@ -151,7 +151,7 @@ dataset = torchtext.legacy.data.TabularDataset(
 )
 
 
-# In[ ]:
+# In[6]:
 
 
 print(len(dataset.examples))
@@ -159,7 +159,7 @@ print(dataset.examples[0].src)
 print(dataset.examples[0].trg)
 
 
-# In[ ]:
+# In[7]:
 
 
 train_data, valid_data, test_data = dataset.split(split_ratio=[0.8, 0.15, 0.05])
@@ -169,14 +169,14 @@ print(f"Number of validation examples: {len(valid_data.examples)}")
 print(f"Number of testing examples: {len(test_data.examples)}")
 
 
-# In[ ]:
+# In[8]:
 
 
 SRC.build_vocab(train_data, min_freq = 2)
 TRG.build_vocab(train_data, min_freq = 2)
 
 
-# In[ ]:
+# In[9]:
 
 
 print(f"Unique tokens in source (ru) vocabulary: {len(SRC.vocab)}")
@@ -185,7 +185,7 @@ print(f"Unique tokens in target (en) vocabulary: {len(TRG.vocab)}")
 
 # And here is example from train dataset:
 
-# In[ ]:
+# In[10]:
 
 
 print(vars(train_data.examples[9]))
@@ -195,13 +195,13 @@ print(vars(train_data.examples[9]))
 # 
 # We use a `BucketIterator` instead of the standard `Iterator` as it creates batches in such a way that it minimizes the amount of padding in both the source and target sentences. 
 
-# In[ ]:
+# In[11]:
 
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
-# In[ ]:
+# In[12]:
 
 
 def _len_sort_key(x):
@@ -222,20 +222,26 @@ train_iterator, valid_iterator, test_iterator = BucketIterator.splits(
 # In[ ]:
 
 
-from google.colab import drive
-drive.mount('/content/drive')
+get_ipython().run_cell_magic('capture', '', '\n!wget https://raw.githubusercontent.com/imvladikon/deep_learning_school/master/semester_2/5_seq2seq_attention/modules.py modules.py')
 
 
 # In[ ]:
 
 
-get_ipython().system('ls your_path_to_modules.py')
+# from google.colab import drive
+# drive.mount('/content/drive')
 
 
 # In[ ]:
 
 
-get_ipython().run_line_magic('cd', './drive/MyDrive/your_path_to_modules.py')
+# !ls your_path_to_modules.py
+
+
+# In[ ]:
+
+
+# %cd ./drive/MyDrive/your_path_to_modules.py
 
 
 # ## Encoder
@@ -359,6 +365,18 @@ get_ipython().run_line_magic('cd', './drive/MyDrive/your_path_to_modules.py')
 # In[ ]:
 
 
+get_ipython().run_cell_magic('capture', '', '\n!wget https://raw.githubusercontent.com/imvladikon/deep_learning_school/master/semester_2/5_seq2seq_attention/modules.py modules.py')
+
+
+# In[ ]:
+
+
+from modules import *
+
+
+# In[16]:
+
+
 # For reloading 
 import modules
 import imp
@@ -370,28 +388,28 @@ Decoder = modules.DecoderWithAttention
 Seq2Seq = modules.Seq2Seq
 
 
-# In[ ]:
+# In[19]:
 
 
-INPUT_DIM = '''your code'''
-OUTPUT_DIM = '''your code'''
-ENC_EMB_DIM = '''your code'''
-DEC_EMB_DIM = '''your code'''
-HID_DIM = '''your code'''
-N_LAYERS = '''your code''' # simple model: n_layers=1
-ENC_DROPOUT = '''your code'''
-DEC_DROPOUT = '''your code'''
+INPUT_DIM = len(SRC.vocab)
+OUTPUT_DIM = len(TRG.vocab)
+ENC_EMB_DIM = 256
+DEC_EMB_DIM = 256
+HID_DIM = 512
+N_LAYERS = 1 # simple model: n_layers=1
+ENC_DROPOUT = 0.5
+DEC_DROPOUT = 0.5
 BIDIRECTIONAL = True
 
-enc = '''your code'''
-attention = '''your code'''
-dec = '''your code'''
+enc = Encoder(INPUT_DIM, ENC_EMB_DIM, HID_DIM, N_LAYERS, ENC_DROPOUT)
+attention = Attention(HID_DIM, HID_DIM)
+dec = Decoder(OUTPUT_DIM, DEC_EMB_DIM, HID_DIM, HID_DIM, DEC_DROPOUT, attention)
 
 # dont forget to put the model to the right device
 model = Seq2Seq(enc, dec, device).to(device)
 
 
-# In[ ]:
+# In[20]:
 
 
 def init_weights(m):
@@ -401,7 +419,7 @@ def init_weights(m):
 model.apply(init_weights)
 
 
-# In[ ]:
+# In[21]:
 
 
 def count_parameters(model):
@@ -410,7 +428,7 @@ def count_parameters(model):
 print(f'The model has {count_parameters(model):,} trainable parameters')
 
 
-# In[ ]:
+# In[22]:
 
 
 PAD_IDX = TRG.vocab.stoi['<pad>']
@@ -510,7 +528,7 @@ def epoch_time(start_time, end_time):
     return elapsed_mins, elapsed_secs
 
 
-# In[ ]:
+# In[23]:
 
 
 import matplotlib
@@ -520,7 +538,7 @@ get_ipython().run_line_magic('matplotlib', 'inline')
 from IPython.display import clear_output
 
 
-# In[ ]:
+# In[24]:
 
 
 train_history = []
@@ -553,9 +571,11 @@ for epoch in range(N_EPOCHS):
     print(f'\t Val. Loss: {valid_loss:.3f} |  Val. PPL: {math.exp(valid_loss):7.3f}')
 
 
+# TODO: добавить в title метрики
+
 # __Let's take a look at our network quality__:
 
-# In[ ]:
+# In[25]:
 
 
 def cut_on_eos(tokens_iter):
@@ -585,7 +605,7 @@ def get_text(x, TRG_vocab):
      return generated
 
 
-# In[ ]:
+# In[26]:
 
 
 #model.load_state_dict(torch.load('best-val-model.pt'))
@@ -603,7 +623,7 @@ for idx in range(10):
 # 
 # <img src="https://drive.google.com/uc?id=1umJF2S8PiayxD9Xo8xvjW8QsrSLidozD" height=400>
 
-# In[ ]:
+# In[27]:
 
 
 from nltk.translate.bleu_score import corpus_bleu
@@ -614,7 +634,7 @@ from nltk.translate.bleu_score import corpus_bleu
 #     return corpus_bleu([[ref] for ref in out_lines], translations) * 100
 
 
-# In[ ]:
+# In[28]:
 
 
 import tqdm
@@ -642,10 +662,130 @@ with torch.no_grad():
 # generated_text = flatten(generated_text)
 
 
-# In[ ]:
+# In[29]:
 
 
 corpus_bleu([[text] for text in original_text], generated_text) * 100
+
+
+# In[30]:
+
+
+get_ipython().run_cell_magic('capture', '', '# @article{lei2021srupp,\n#   title={When Attention Meets Fast Recurrence: Training Language Models with Reduced Compute},\n#   author={Tao Lei},\n#   journal={arXiv preprint arXiv:2102.12459},\n#   code={https://github.com/asappresearch/sru},\n#   year={2021}\n# }\n!pip install sru')
+
+
+# In[ ]:
+
+
+import torch
+from sru import SRU, SRUCell
+
+# input has length 20, batch size 32 and dimension 128
+x = torch.FloatTensor(20, 32, 128).cuda()
+
+input_size, hidden_size = 128, 128
+
+rnn = SRU(input_size, hidden_size,
+    num_layers = 2,          # number of stacking RNN layers
+    dropout = 0.0,           # dropout applied between RNN layers
+    bidirectional = False,   # bidirectional RNN
+    layer_norm = False,      # apply layer normalization on the output of each layer
+    highway_bias = -2,        # initial bias of highway gate (<= 0)
+)
+rnn.cuda()
+
+output_states, c_states = rnn(x)      # forward pass
+
+
+# In[ ]:
+
+
+
+
+#https://github.com/keitakurita/Better_LSTM_PyTorch/blob/master/better_lstm/model.py
+class VariationalDropout(nn.Module):
+    """
+    Applies the same dropout mask across the temporal dimension
+    See https://arxiv.org/abs/1512.05287 for more details.
+    Note that this is not applied to the recurrent activations in the LSTM like the above paper.
+    Instead, it is applied to the inputs and outputs of the recurrent layer.
+    """
+    def __init__(self, dropout, batch_first=False):
+        super().__init__()
+        self.dropout = dropout
+        self.batch_first = batch_first
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if not self.training or self.dropout <= 0.:
+            return x
+
+        is_packed = isinstance(x, PackedSequence)
+        if is_packed:
+            x, batch_sizes = x
+            max_batch_size = int(batch_sizes[0])
+        else:
+            batch_sizes = None
+            max_batch_size = x.size(0)
+
+        # Drop same mask across entire sequence
+        if self.batch_first:
+            m = x.new_empty(max_batch_size, 1, x.size(2), requires_grad=False).bernoulli_(1 - self.dropout)
+        else:
+            m = x.new_empty(1, max_batch_size, x.size(2), requires_grad=False).bernoulli_(1 - self.dropout)
+        x = x.masked_fill(m == 0, 0) / (1 - self.dropout)
+
+        if is_packed:
+            return PackedSequence(x, batch_sizes)
+        else:
+            return x
+
+
+#https://github.com/keitakurita/Better_LSTM_PyTorch/blob/master/better_lstm/model.py
+class LSTM(nn.LSTM):
+    def __init__(self, *args, dropouti: float=0.,
+                 dropoutw: float=0., dropouto: float=0.,
+                 batch_first=True, unit_forget_bias=True, **kwargs):
+        super().__init__(*args, **kwargs, batch_first=batch_first)
+        self.unit_forget_bias = unit_forget_bias
+        self.dropoutw = dropoutw
+        self.input_drop = VariationalDropout(dropouti,
+                                             batch_first=batch_first)
+        self.output_drop = VariationalDropout(dropouto,
+                                              batch_first=batch_first)
+        self._init_weights()
+
+    def _init_weights(self):
+        """
+        Use orthogonal init for recurrent layers, xavier uniform for input layers
+        Bias is 0 except for forget gate
+        """
+        for name, param in self.named_parameters():
+            if "weight_hh" in name:
+                nn.init.orthogonal_(param.data)
+            elif "weight_ih" in name:
+                nn.init.xavier_uniform_(param.data)
+            elif "bias" in name and self.unit_forget_bias:
+                nn.init.zeros_(param.data)
+                param.data[self.hidden_size:2 * self.hidden_size] = 1
+
+    def _drop_weights(self):
+        for name, param in self.named_parameters():
+            if "weight_hh" in name:
+                getattr(self, name).data =                     torch.nn.functional.dropout(param.data, p=self.dropoutw,
+                                                training=self.training).contiguous()
+
+    def forward(self, input, hx=None):
+        self._drop_weights()
+        input = self.input_drop(input)
+        seq, state = super().forward(input, hx=hx)
+        return self.output_drop(seq), state
+
+
+# In[ ]:
+
+
+# gumbel_softmax
+# https://datascience.stackexchange.com/questions/58376/gumbel-softmax-trick-vs-softmax-with-temperature
 
 
 # ## Recommendations:
