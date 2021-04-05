@@ -4,6 +4,8 @@
 # <img src="https://s8.hostingkartinok.com/uploads/images/2018/08/308b49fcfbc619d629fe4604bceb67ac.jpg" width=500, height=450>
 # <h3 style="text-align: center;"><b>Физтех-Школа Прикладной математики и информатики (ФПМИ) МФТИ</b></h3>
 
+# https://github.com/ManhPP/NMT_ATT/blob/b05d8c40789f4b10a5349492e969ceca92103b1a/model.py
+
 # ***Some parts of the notebook are almost the exact copy of***  https://github.com/yandexdataschool/nlp_course
 
 # ##  Attention
@@ -65,7 +67,7 @@
 # 
 # Write down some summary on your experiments and illustrate it with convergence plots/metrics and your thoughts. Just like you would approach a real problem.
 
-# In[1]:
+# In[20]:
 
 
 get_ipython().system(' wget https://drive.google.com/uc?id=1NWYqJgeG_4883LINdEjKUr6nLQPY6Yb_ -O data.txt')
@@ -74,15 +76,18 @@ get_ipython().system(' wget https://drive.google.com/uc?id=1NWYqJgeG_4883LINdEjK
 # (who thanks tilda and deephack teams for the data in their turn)
 
 
-# In[2]:
+# In[21]:
 
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
-
+from torch.nn import functional as F
 import torchtext
-from torchtext.legacy.data import Field, BucketIterator
+try:
+  from torchtext.data import Field, BucketIterator
+except:
+  from torchtext.legacy.data import Field, BucketIterator
 
 import spacy
 
@@ -99,10 +104,35 @@ from IPython.display import clear_output
 
 from nltk.tokenize import WordPunctTokenizer
 
+import pandas as pd
+from sklearn.model_selection import ParameterGrid
+
+from nltk.translate.bleu_score import corpus_bleu
+import tqdm
+import os
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch import Tensor
+import random
+
+
+# In[22]:
+
+
+get_ipython().run_cell_magic('capture', '', '!pip install transformers')
+
+
+# In[23]:
+
+
+from transformers import AdamW
+from transformers.optimization import get_linear_schedule_with_warmup
+
 
 # We'll set the random seeds for deterministic results.
 
-# In[3]:
+# In[24]:
 
 
 SEED = 1234
@@ -118,7 +148,7 @@ torch.backends.cudnn.deterministic = True
 # 
 # Here comes the preprocessing
 
-# In[4]:
+# In[25]:
 
 
 tokenizer_W = WordPunctTokenizer()
@@ -130,7 +160,7 @@ def tokenize_en(x, tokenizer=tokenizer_W):
     return tokenizer.tokenize(x.lower())
 
 
-# In[5]:
+# In[26]:
 
 
 SRC = Field(tokenize=tokenize_ru,
@@ -151,7 +181,7 @@ dataset = torchtext.legacy.data.TabularDataset(
 )
 
 
-# In[6]:
+# In[27]:
 
 
 print(len(dataset.examples))
@@ -159,7 +189,7 @@ print(dataset.examples[0].src)
 print(dataset.examples[0].trg)
 
 
-# In[7]:
+# In[28]:
 
 
 train_data, valid_data, test_data = dataset.split(split_ratio=[0.8, 0.15, 0.05])
@@ -169,14 +199,14 @@ print(f"Number of validation examples: {len(valid_data.examples)}")
 print(f"Number of testing examples: {len(test_data.examples)}")
 
 
-# In[8]:
+# In[29]:
 
 
 SRC.build_vocab(train_data, min_freq = 2)
 TRG.build_vocab(train_data, min_freq = 2)
 
 
-# In[9]:
+# In[30]:
 
 
 print(f"Unique tokens in source (ru) vocabulary: {len(SRC.vocab)}")
@@ -185,7 +215,7 @@ print(f"Unique tokens in target (en) vocabulary: {len(TRG.vocab)}")
 
 # And here is example from train dataset:
 
-# In[10]:
+# In[31]:
 
 
 print(vars(train_data.examples[9]))
@@ -195,19 +225,19 @@ print(vars(train_data.examples[9]))
 # 
 # We use a `BucketIterator` instead of the standard `Iterator` as it creates batches in such a way that it minimizes the amount of padding in both the source and target sentences. 
 
-# In[11]:
+# In[32]:
 
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
-# In[12]:
+# In[33]:
 
 
 def _len_sort_key(x):
     return len(x.src)
 
-BATCH_SIZE = 128
+BATCH_SIZE = 32
 
 train_iterator, valid_iterator, test_iterator = BucketIterator.splits(
     (train_data, valid_data, test_data), 
@@ -219,26 +249,26 @@ train_iterator, valid_iterator, test_iterator = BucketIterator.splits(
 
 # ## Let's use modules.py
 
-# In[ ]:
+# In[34]:
 
 
 get_ipython().run_cell_magic('capture', '', '\n!wget https://raw.githubusercontent.com/imvladikon/deep_learning_school/master/semester_2/5_seq2seq_attention/modules.py modules.py')
 
 
-# In[ ]:
+# In[35]:
 
 
 # from google.colab import drive
 # drive.mount('/content/drive')
 
 
-# In[ ]:
+# In[36]:
 
 
 # !ls your_path_to_modules.py
 
 
-# In[ ]:
+# In[37]:
 
 
 # %cd ./drive/MyDrive/your_path_to_modules.py
@@ -264,13 +294,34 @@ get_ipython().run_cell_magic('capture', '', '\n!wget https://raw.githubuserconte
 # <br><br>
 # <img src="https://drive.google.com/uc?id=1uIUxtZU8NvGdz0J9BlRSTbsBLFh32rxx">
 
-# In[ ]:
+# In[73]:
 
 
-# you can paste code of encoder from modules.py
-# the encoder can be like seminar encoder but you have to return outputs
-# and if you use bidirectional you won't make the same operation like with hidden
-# because outputs = [src sent len, batch size, hid dim * n directions]
+class Encoder(nn.Module):
+    def __init__(self,
+                 input_dim: int,
+                 emb_dim: int,
+                 enc_hid_dim: int,
+                 dec_hid_dim: int,
+                 dropout: float):
+        super().__init__()
+
+        self.input_dim = input_dim
+        self.emb_dim = emb_dim
+        self.enc_hid_dim = enc_hid_dim
+        self.dec_hid_dim = dec_hid_dim
+        self.dropout = dropout
+        self.embedding = nn.Embedding(input_dim, emb_dim)
+        self.rnn = nn.GRU(emb_dim, enc_hid_dim, bidirectional=True)
+        self.fc = nn.Linear(enc_hid_dim * 2, dec_hid_dim)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self,
+                src):
+        embedded = self.dropout(self.embedding(src))
+        outputs, hidden = self.rnn(embedded)
+        hidden = torch.tanh(self.fc(torch.cat((hidden[-2, :, :], hidden[-1, :, :]), dim=1)))
+        return outputs, hidden
 
 
 # ## Attention
@@ -278,14 +329,32 @@ get_ipython().run_cell_magic('capture', '', '\n!wget https://raw.githubuserconte
 # $$\operatorname{score}\left(\boldsymbol{h}, \boldsymbol{s}_{t-1}\right)=
 # \boldsymbol{v}_{a}^{\top} \tanh \left(\boldsymbol{W}_{\boldsymbol{a}}\left[\boldsymbol{h} ; \boldsymbol{s}_{t-1}\right]\right) \text { - concat attention}$$
 
-# In[ ]:
+# In[54]:
 
 
-# you can paste code of attention from modules.py
+def softmax(x, dim=None, temperature = 1.):
+    e_x = torch.exp(x / temperature)
+    return e_x / torch.sum(e_x, dim=dim)
 
-# def softmax(x, temperature=10): # use your temperature
-#     e_x = torch.exp(x / temperature)
-#     return e_x / torch.sum(e_x, dim=0)
+
+class Attention(nn.Module):
+    def __init__(self, enc_hid_dim, dec_hid_dim, temperature = 1.):
+        super().__init__()
+
+        self.attn = nn.Linear((enc_hid_dim * 2) + dec_hid_dim, dec_hid_dim)
+        self.v = nn.Linear(dec_hid_dim, 1, bias=False)
+        self.temperature = temperature
+
+    def forward(self, hidden, encoder_outputs):
+        batch_size = encoder_outputs.shape[1]
+        src_len = encoder_outputs.shape[0]
+
+        hidden = hidden.unsqueeze(1).repeat(1, src_len, 1)
+        encoder_outputs = encoder_outputs.permute(1, 0, 2)
+        energy = torch.tanh(self.attn(torch.cat((hidden, encoder_outputs), dim=2)))
+        attention = self.v(energy).squeeze(2)
+        # return F.softmax(attention, dim=1)
+        return softmax(attention, dim=0, temperature = self.temperature)
 
 
 # ## Decoder with Attention
@@ -325,10 +394,36 @@ get_ipython().run_cell_magic('capture', '', '\n!wget https://raw.githubuserconte
 # 
 # 
 
-# In[ ]:
+# In[74]:
 
 
-# you can paste code of decoder from modules.py
+class DecoderWithAttention(nn.Module):
+    def __init__(self, output_dim, emb_dim, enc_hid_dim, dec_hid_dim, dropout, attention):
+        super().__init__()
+
+        self.output_dim = output_dim
+        self.attention = attention
+
+        self.embedding = nn.Embedding(output_dim, emb_dim)
+        self.rnn = nn.GRU((enc_hid_dim * 2) + emb_dim, dec_hid_dim)
+        self.fc_out = nn.Linear((enc_hid_dim * 2) + dec_hid_dim + emb_dim, output_dim)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, input, hidden, encoder_outputs):
+        input = input.unsqueeze(0)
+        embedded = self.dropout(self.embedding(input))
+        a = self.attention(hidden, encoder_outputs)
+        a = a.unsqueeze(1)
+        encoder_outputs = encoder_outputs.permute(1, 0, 2)
+        weighted = torch.bmm(a, encoder_outputs)
+        weighted = weighted.permute(1, 0, 2)
+        rnn_input = torch.cat((embedded, weighted), dim=2)
+        output, hidden = self.rnn(rnn_input, hidden.unsqueeze(0))
+        embedded = embedded.squeeze(0)
+        output = output.squeeze(0)
+        weighted = weighted.squeeze(0)
+        prediction = self.fc_out(torch.cat((output, weighted, embedded), dim=1))
+        return prediction, hidden.squeeze(0), a
 
 
 # ## Seq2Seq
@@ -354,88 +449,57 @@ get_ipython().run_cell_magic('capture', '', '\n!wget https://raw.githubuserconte
 # \text{outputs} = [&\hat{y}_1, \hat{y}_2, \hat{y}_3, <eos>]
 # \end{align*}$$
 
-# In[ ]:
+# In[69]:
 
 
-# you can paste code of seq2seq from modules.py
+class Seq2Seq(nn.Module):
+    def __init__(self, encoder, decoder, device):
+        super().__init__()
+
+        self.encoder = encoder
+        self.decoder = decoder
+        self.device = device
+
+    def forward(self, src, trg, teacher_forcing_ratio=0.5):
+        batch_size = src.shape[1]
+        trg_len = trg.shape[0]
+        trg_vocab_size = self.decoder.output_dim
+
+        outputs = torch.zeros(trg_len, batch_size, trg_vocab_size).to(self.device)
+        encoder_outputs, hidden = self.encoder(src)
+        inp = trg[0, :]
+        for t in range(1, trg_len):
+            output, hidden, attn_weights = self.decoder(inp, hidden, encoder_outputs)
+            outputs[t] = output
+            teacher_force = random.random() < teacher_forcing_ratio
+            top1 = output.argmax(1)
+            inp = trg[t] if teacher_force else top1
+        return outputs
 
 
 # ## Training
 
-# In[ ]:
+# In[40]:
 
 
-get_ipython().run_cell_magic('capture', '', '\n!wget https://raw.githubusercontent.com/imvladikon/deep_learning_school/master/semester_2/5_seq2seq_attention/modules.py modules.py')
-
-
-# In[ ]:
-
-
-from modules import *
-
-
-# In[16]:
-
+#we use code from notebook
 
 # For reloading 
-import modules
-import imp
-imp.reload(modules)
+# from modules import *
+# import modules
+# import imp
+# imp.reload(modules)
 
-Encoder = modules.Encoder
-Attention = modules.Attention
-Decoder = modules.DecoderWithAttention
-Seq2Seq = modules.Seq2Seq
-
-
-# In[19]:
+# Encoder = modules.Encoder
+# Attention = modules.Attention
+# Decoder = modules.DecoderWithAttention
+# Seq2Seq = modules.Seq2Seq
 
 
-INPUT_DIM = len(SRC.vocab)
-OUTPUT_DIM = len(TRG.vocab)
-ENC_EMB_DIM = 256
-DEC_EMB_DIM = 256
-HID_DIM = 512
-N_LAYERS = 1 # simple model: n_layers=1
-ENC_DROPOUT = 0.5
-DEC_DROPOUT = 0.5
-BIDIRECTIONAL = True
-
-enc = Encoder(INPUT_DIM, ENC_EMB_DIM, HID_DIM, N_LAYERS, ENC_DROPOUT)
-attention = Attention(HID_DIM, HID_DIM)
-dec = Decoder(OUTPUT_DIM, DEC_EMB_DIM, HID_DIM, HID_DIM, DEC_DROPOUT, attention)
-
-# dont forget to put the model to the right device
-model = Seq2Seq(enc, dec, device).to(device)
+# In[41]:
 
 
-# In[20]:
-
-
-def init_weights(m):
-    for name, param in m.named_parameters():
-        nn.init.uniform_(param, -0.08, 0.08)
-        
-model.apply(init_weights)
-
-
-# In[21]:
-
-
-def count_parameters(model):
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-print(f'The model has {count_parameters(model):,} trainable parameters')
-
-
-# In[22]:
-
-
-PAD_IDX = TRG.vocab.stoi['<pad>']
-optimizer = optim.Adam(model.parameters())
-criterion = nn.CrossEntropyLoss(ignore_index = PAD_IDX)
-
-def train(model, iterator, optimizer, criterion, clip, train_history=None, valid_history=None):
+def train(model, iterator, optimizer, criterion, clip, train_history=None, valid_history=None, scheduler=None):
     model.train()
     
     epoch_loss = 0
@@ -466,6 +530,8 @@ def train(model, iterator, optimizer, criterion, clip, train_history=None, valid
         torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
         
         optimizer.step()
+        if scheduler is not None:
+          scheduler.step() 
         
         epoch_loss += loss.item()
         
@@ -480,6 +546,7 @@ def train(model, iterator, optimizer, criterion, clip, train_history=None, valid
             if train_history is not None:
                 ax[1].plot(train_history, label='general train history')
                 ax[1].set_xlabel('Epoch')
+                ax[1].set_title(history[-1])
             if valid_history is not None:
                 ax[1].plot(valid_history, label='general valid history')
             plt.legend()
@@ -489,6 +556,7 @@ def train(model, iterator, optimizer, criterion, clip, train_history=None, valid
         
     return epoch_loss / len(iterator)
 
+@torch.no_grad()
 def evaluate(model, iterator, criterion):
     
     model.eval()
@@ -497,27 +565,25 @@ def evaluate(model, iterator, criterion):
     
     history = []
     
-    with torch.no_grad():
-    
-        for i, batch in enumerate(iterator):
+    for i, batch in enumerate(iterator):
 
-            src = batch.src
-            trg = batch.trg
+        src = batch.src
+        trg = batch.trg
 
-            output = model(src, trg, 0) #turn off teacher forcing
+        output = model(src, trg, 0) #turn off teacher forcing
 
-            #trg = [trg sent len, batch size]
-            #output = [trg sent len, batch size, output dim]
+        #trg = [trg sent len, batch size]
+        #output = [trg sent len, batch size, output dim]
 
-            output = output[1:].view(-1, OUTPUT_DIM)
-            trg = trg[1:].view(-1)
+        output = output[1:].view(-1, OUTPUT_DIM)
+        trg = trg[1:].view(-1)
 
-            #trg = [(trg sent len - 1) * batch size]
-            #output = [(trg sent len - 1) * batch size, output dim]
+        #trg = [(trg sent len - 1) * batch size]
+        #output = [(trg sent len - 1) * batch size, output dim]
 
-            loss = criterion(output, trg)
-            
-            epoch_loss += loss.item()
+        loss = criterion(output, trg)
+        
+        epoch_loss += loss.item()
         
     return epoch_loss / len(iterator)
 
@@ -528,17 +594,37 @@ def epoch_time(start_time, end_time):
     return elapsed_mins, elapsed_secs
 
 
-# In[23]:
+# In[42]:
 
 
-import matplotlib
-matplotlib.rcParams.update({'figure.figsize': (16, 12), 'font.size': 14})
-import matplotlib.pyplot as plt
-get_ipython().run_line_magic('matplotlib', 'inline')
-from IPython.display import clear_output
+INPUT_DIM = len(SRC.vocab)
+OUTPUT_DIM = len(TRG.vocab)
+ENC_EMB_DIM = 256
+DEC_EMB_DIM = 256
+ENC_HID_DIM = 512
+DEC_HID_DIM = 512
+N_LAYERS = 1
+ENC_DROPOUT = 0.5
+DEC_DROPOUT = 0.5
+BIDIRECTIONAL = True
 
 
-# In[24]:
+enc = Encoder(INPUT_DIM, ENC_EMB_DIM, ENC_HID_DIM, DEC_HID_DIM, ENC_DROPOUT)
+attention = Attention(ENC_HID_DIM, DEC_HID_DIM)
+dec = DecoderWithAttention(OUTPUT_DIM, DEC_EMB_DIM, ENC_HID_DIM, DEC_HID_DIM, DEC_DROPOUT, attention)
+
+model = Seq2Seq(enc, dec, device).to(device)
+
+def init_weights(m):
+    for name, param in m.named_parameters():
+        nn.init.uniform_(param, -0.08, 0.08)
+        
+model.apply(init_weights)
+
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+print(f'The model has {count_parameters(model):,} trainable parameters')
 
 
 train_history = []
@@ -546,6 +632,9 @@ valid_history = []
 
 N_EPOCHS = 12
 CLIP = 5
+PAD_IDX = TRG.vocab.stoi['<pad>']
+optimizer = optim.Adam(model.parameters())
+criterion = nn.CrossEntropyLoss(ignore_index = PAD_IDX)
 
 best_valid_loss = float('inf')
 
@@ -571,11 +660,9 @@ for epoch in range(N_EPOCHS):
     print(f'\t Val. Loss: {valid_loss:.3f} |  Val. PPL: {math.exp(valid_loss):7.3f}')
 
 
-# TODO: добавить в title метрики
-
 # __Let's take a look at our network quality__:
 
-# In[25]:
+# In[43]:
 
 
 def cut_on_eos(tokens_iter):
@@ -605,7 +692,7 @@ def get_text(x, TRG_vocab):
      return generated
 
 
-# In[26]:
+# In[44]:
 
 
 #model.load_state_dict(torch.load('best-val-model.pt'))
@@ -623,21 +710,11 @@ for idx in range(10):
 # 
 # <img src="https://drive.google.com/uc?id=1umJF2S8PiayxD9Xo8xvjW8QsrSLidozD" height=400>
 
-# In[27]:
+# вообще судя по повторяющимся предсказаниям, наши рнн-ки испытывают проблемки при обучении и неплохо бы изменить clip значение, поменять может дропаут (а может вообще varitional dropout) но это мы оставим за скобками ноутбука.
+
+# In[45]:
 
 
-from nltk.translate.bleu_score import corpus_bleu
-
-#     """ Estimates corpora-level BLEU score of model's translations given inp and reference out """
-#     translations, _ = model.translate_lines(inp_lines, **flags)
-#     # Note: if you experience out-of-memory error, split input lines into batches and translate separately
-#     return corpus_bleu([[ref] for ref in out_lines], translations) * 100
-
-
-# In[28]:
-
-
-import tqdm
 original_text = []
 generated_text = []
 model.eval()
@@ -662,131 +739,13 @@ with torch.no_grad():
 # generated_text = flatten(generated_text)
 
 
-# In[29]:
+# In[46]:
 
 
 corpus_bleu([[text] for text in original_text], generated_text) * 100
 
 
-# In[30]:
-
-
-get_ipython().run_cell_magic('capture', '', '# @article{lei2021srupp,\n#   title={When Attention Meets Fast Recurrence: Training Language Models with Reduced Compute},\n#   author={Tao Lei},\n#   journal={arXiv preprint arXiv:2102.12459},\n#   code={https://github.com/asappresearch/sru},\n#   year={2021}\n# }\n!pip install sru')
-
-
-# In[ ]:
-
-
-import torch
-from sru import SRU, SRUCell
-
-# input has length 20, batch size 32 and dimension 128
-x = torch.FloatTensor(20, 32, 128).cuda()
-
-input_size, hidden_size = 128, 128
-
-rnn = SRU(input_size, hidden_size,
-    num_layers = 2,          # number of stacking RNN layers
-    dropout = 0.0,           # dropout applied between RNN layers
-    bidirectional = False,   # bidirectional RNN
-    layer_norm = False,      # apply layer normalization on the output of each layer
-    highway_bias = -2,        # initial bias of highway gate (<= 0)
-)
-rnn.cuda()
-
-output_states, c_states = rnn(x)      # forward pass
-
-
-# In[ ]:
-
-
-
-
-#https://github.com/keitakurita/Better_LSTM_PyTorch/blob/master/better_lstm/model.py
-class VariationalDropout(nn.Module):
-    """
-    Applies the same dropout mask across the temporal dimension
-    See https://arxiv.org/abs/1512.05287 for more details.
-    Note that this is not applied to the recurrent activations in the LSTM like the above paper.
-    Instead, it is applied to the inputs and outputs of the recurrent layer.
-    """
-    def __init__(self, dropout, batch_first=False):
-        super().__init__()
-        self.dropout = dropout
-        self.batch_first = batch_first
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if not self.training or self.dropout <= 0.:
-            return x
-
-        is_packed = isinstance(x, PackedSequence)
-        if is_packed:
-            x, batch_sizes = x
-            max_batch_size = int(batch_sizes[0])
-        else:
-            batch_sizes = None
-            max_batch_size = x.size(0)
-
-        # Drop same mask across entire sequence
-        if self.batch_first:
-            m = x.new_empty(max_batch_size, 1, x.size(2), requires_grad=False).bernoulli_(1 - self.dropout)
-        else:
-            m = x.new_empty(1, max_batch_size, x.size(2), requires_grad=False).bernoulli_(1 - self.dropout)
-        x = x.masked_fill(m == 0, 0) / (1 - self.dropout)
-
-        if is_packed:
-            return PackedSequence(x, batch_sizes)
-        else:
-            return x
-
-
-#https://github.com/keitakurita/Better_LSTM_PyTorch/blob/master/better_lstm/model.py
-class LSTM(nn.LSTM):
-    def __init__(self, *args, dropouti: float=0.,
-                 dropoutw: float=0., dropouto: float=0.,
-                 batch_first=True, unit_forget_bias=True, **kwargs):
-        super().__init__(*args, **kwargs, batch_first=batch_first)
-        self.unit_forget_bias = unit_forget_bias
-        self.dropoutw = dropoutw
-        self.input_drop = VariationalDropout(dropouti,
-                                             batch_first=batch_first)
-        self.output_drop = VariationalDropout(dropouto,
-                                              batch_first=batch_first)
-        self._init_weights()
-
-    def _init_weights(self):
-        """
-        Use orthogonal init for recurrent layers, xavier uniform for input layers
-        Bias is 0 except for forget gate
-        """
-        for name, param in self.named_parameters():
-            if "weight_hh" in name:
-                nn.init.orthogonal_(param.data)
-            elif "weight_ih" in name:
-                nn.init.xavier_uniform_(param.data)
-            elif "bias" in name and self.unit_forget_bias:
-                nn.init.zeros_(param.data)
-                param.data[self.hidden_size:2 * self.hidden_size] = 1
-
-    def _drop_weights(self):
-        for name, param in self.named_parameters():
-            if "weight_hh" in name:
-                getattr(self, name).data =                     torch.nn.functional.dropout(param.data, p=self.dropoutw,
-                                                training=self.training).contiguous()
-
-    def forward(self, input, hx=None):
-        self._drop_weights()
-        input = self.input_drop(input)
-        seq, state = super().forward(input, hx=hx)
-        return self.output_drop(seq), state
-
-
-# In[ ]:
-
-
-# gumbel_softmax
-# https://datascience.stackexchange.com/questions/58376/gumbel-softmax-trick-vs-softmax-with-temperature
-
+# был получен довольно хороший результат
 
 # ## Recommendations:
 # * use bidirectional RNN
@@ -809,8 +768,8 @@ class LSTM(nn.LSTM):
 # * information about your the results obtained 
 # * difference between seminar and homework model
 
-# In[ ]:
+# макисмальный результат = 31 в целом нужно увеличивать аккуратно hid_dim при определенном dropout. возможно стоит также поиграться с VariationalDropout (имплементация например https://github.com/yeahrmek/rnn_vd). также нужно подбирать соответствующую температуру для сглаживания
 
-
-
-
+# ## References
+# 
+# * https://lena-voita.github.io/nlp_course/seq2seq_and_attention.html
