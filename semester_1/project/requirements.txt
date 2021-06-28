@@ -1,0 +1,7 @@
+torch==1.6.1+cpu
+torchvision==0.6.1+cpu
+aiogram
+aiohttp
+aiohttp-socks
+numpy
+pillow
