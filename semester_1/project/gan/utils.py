@@ -4,7 +4,8 @@ from PIL import Image
 import numpy as np
 import torch
 from torch.autograd import Variable
-from torchvision import transforms
+
+from gan.net2 import Net
 
 
 def tensor_load_rgbimage(filename, size=None, scale=None, keep_asp=False):
@@ -47,25 +48,34 @@ def preprocess_batch(batch):
     batch = batch.transpose(0, 1)
     return batch
 
-def apply_style_transfer(style_model, content_root, style_root, im_size):
-    content_image = tensor_load_rgbimage(content_root, size=im_size,
+
+def apply_style_transfer(style_model: Net, main_photo: str, style_photo: str, im_size: int)->Image:
+    content_image = tensor_load_rgbimage(main_photo, size=im_size,
                                          keep_asp=True).unsqueeze(0)
-    style = tensor_load_rgbimage(style_root, size=im_size).unsqueeze(0)
+    style = tensor_load_rgbimage(style_photo, size=im_size).unsqueeze(0)
     style = preprocess_batch(style)
+
     style_v = Variable(style)
     content_image = Variable(preprocess_batch(content_image))
     style_model.setTarget(style_v)
+
     output = style_model(content_image)
+
     del content_image, style, style_v
+
     torch.cuda.empty_cache()
     gc.collect()
+
     tensor = output.data[0]
     (b, g, r) = torch.chunk(tensor, 3)
     tensor = torch.cat((r, g, b))
+
     if torch.cuda.is_available():
         img = tensor.clone().cpu().clamp(0, 255).numpy()
     else:
         img = tensor.clone().clamp(0, 255).numpy()
+
     img = img.transpose(1, 2, 0).astype('uint8')
     img = Image.fromarray(img)
+
     return img
