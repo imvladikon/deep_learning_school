@@ -5,7 +5,6 @@ import numpy as np
 import torch
 from torch.autograd import Variable
 
-from gan.net2 import Net
 
 
 def tensor_load_rgbimage(filename, size=None, scale=None, keep_asp=False):
@@ -49,7 +48,7 @@ def preprocess_batch(batch):
     return batch
 
 
-def apply_style_transfer(style_model: Net, main_photo: str, style_photo: str, im_size: int)->Image:
+def apply_style_transfer(style_model, main_photo: str, style_photo: str, im_size: int)->Image:
     content_image = tensor_load_rgbimage(main_photo, size=im_size,
                                          keep_asp=True).unsqueeze(0)
     style = tensor_load_rgbimage(style_photo, size=im_size).unsqueeze(0)
