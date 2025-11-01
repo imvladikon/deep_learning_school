@@ -1,0 +1,13 @@
+torch
+torchaudio
+transformers
+datasets
+pyaudio
+pandas
+librosa
+numpy
+matplotlib
+ipython
+jupyter
+nbformat
+nbconvert

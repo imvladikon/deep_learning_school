@@ -1,0 +1,45 @@
+[project]
+name = "audiossl"
+version = "0.0.1"
+description = "Self-supervised learning audio package"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "scikit-learn",
+    "scipy",
+    "pandas",
+    "matplotlib",
+    "seaborn",
+    "tqdm",
+    "torch",
+    "torchaudio",
+    "torchcodec",
+    "transformers>=4.30.0",
+    "tokenizers>=0.13.0",
+    "datasets[audio]",
+    "huggingface-hub>=0.14.1",
+    "accelerate",
+    "evaluate",
+    "torch-audiomentations",
+    "audiomentations",
+    "sentencepiece",
+    "soundfile",
+    "librosa",
+    "pyctcdecode",
+    "jiwer",
+    "wandb",
+    "jupyter",
+    "jupyterlab",
+    "ipython",
+    "ipykernel",
+    "nbconvert",
+    "nbformat",
+    "ipywidgets"
+]
+
+[tool.setuptools]
+packages = ["audiossl"]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
